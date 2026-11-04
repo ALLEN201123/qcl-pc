@@ -1,0 +1,31 @@
+# ---- 依赖与产物 ----
+node_modules/
+dist/
+outputs/
+build/installer/_work/
+build/*.zip
+
+# ---- 缓存 ----
+.cache/
+_probe/
+_ref/
+_devtest/
+.selftest-home/
+.probe-home/
+.e2e-home/
+.sfx-test/
+.content-test*/
+.*-home/
+.backup-*/
+
+# ---- 只读参照源码（体积大，不进仓库）----
+vendor/
+
+# ---- 本地杂项 ----
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# docs 里只留正式截图，诊断截图不进仓库
+docs/_*

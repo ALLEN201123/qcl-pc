@@ -1,0 +1,298 @@
+'use strict';
+/*
+ * instances.js —— 实例 CRUD。
+ *
+ * 照 MultiMC 的实例隔离模型：每个实例有自己的目录与独立的 .minecraft，
+ * 共享的只有 <QCL_HOME>/meta 缓存。
+ *
+ * 存储：
+ *   <home>/instances.json           索引（只存 id 顺序与少量冗余字段，方便秒开列表）
+ *   <home>/instances/<id>/instance.json   权威元数据
+ *   <home>/instances/<id>/.minecraft/     隔离的游戏目录
+ */
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const jsonstore = require('./jsonstore');
+const paths = require('./paths');
+
+/** 合法的 loader 类型（契约 §3.3；babric / modloader 是远古版本的两种加载器）。 */
+const LOADER_TYPES = ['vanilla', 'forge', 'fabric', 'quilt', 'neoforge', 'optifine', 'liteloader', 'babric', 'modloader'];
+
+/** .minecraft 下要预先建好的子目录。 */
+const GAME_SUBDIRS = ['versions', 'libraries', 'assets', 'natives', 'mods', 'saves', 'resourcepacks', 'shaderpacks', 'config', 'logs'];
+
+function newId() {
+  return `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function normalizeLoader(loader) {
+  if (!loader || typeof loader !== 'object') return null;
+  const type = String(loader.type || 'vanilla').toLowerCase();
+  if (!LOADER_TYPES.includes(type)) return null;
+  if (type === 'vanilla') return { type: 'vanilla', version: String(loader.version || '') };
+  return { type, version: String(loader.version || '') };
+}
+
+function readIndex(home) {
+  const data = jsonstore.readJson(paths.instancesIndexFile(home), null);
+  if (!data || typeof data !== 'object') return { version: 1, instances: [] };
+  return {
+    version: 1,
+    instances: Array.isArray(data.instances) ? data.instances.filter((x) => typeof x === 'string' && x) : [],
+  };
+}
+
+function writeIndex(home, index) {
+  jsonstore.writeJson(paths.instancesIndexFile(home), index);
+}
+
+function addToIndex(home, id) {
+  const index = readIndex(home);
+  if (!index.instances.includes(id)) {
+    index.instances.push(id);
+    writeIndex(home, index);
+  }
+}
+
+function removeFromIndex(home, id) {
+  const index = readIndex(home);
+  index.instances = index.instances.filter((x) => x !== id);
+  writeIndex(home, index);
+}
+
+/** 建好实例目录骨架。 */
+function ensureInstanceLayout(home, id) {
+  paths.ensureDir(paths.instanceDir(home, id));
+  const game = paths.gameDir(home, id);
+  paths.ensureDir(game);
+  for (const sub of GAME_SUBDIRS) paths.ensureDir(path.join(game, sub));
+  return game;
+}
+
+/** 补齐字段并算出 dir（绝对路径）。 */
+function hydrate(home, id, data) {
+  const dir = paths.instanceDir(home, id);
+  const record = data && typeof data === 'object' ? data : {};
+  const loader = normalizeLoader(record.loader);
+  return {
+    id,
+    name: record.name || id,
+    icon: record.icon || 'grass',
+    mcVersion: record.mcVersion || '',
+    installedVersion: record.installedVersion || record.mcVersion || '',
+    loader: loader && loader.type !== 'vanilla' ? loader : (loader || null),
+    java: {
+      path: record.java && record.java.path ? record.java.path : null,
+      memoryMb: record.java && Number.isFinite(record.java.memoryMb) ? record.java.memoryMb : null,
+    },
+    created: Number.isFinite(record.created) ? record.created : Date.now(),
+    lastPlayed: Number.isFinite(record.lastPlayed) ? record.lastPlayed : null,
+    playTime: Number.isFinite(record.playTime) ? record.playTime : 0,
+    dir,
+    notes: record.notes || '',
+    group: record.group || '',
+    /**
+     * ★ 跟着安卓版走的两个字段：
+     *   · notCheckGameFiles ——「不检查游戏文件」（远古版本装完自动打开）。
+     *     远古版本的中文补丁改写了游戏 jar，全量 SHA1 校验会把它当成"损坏"还原掉。
+     *   · chinesePack —— 中文补丁状态（语言 / 补丁目录），供工具页与校验逻辑判断。
+     * ★ hydrate 是**白名单**，新字段必须在这里显式列出，否则会被静默丢弃（踩过）。
+     */
+    notCheckGameFiles: record.notCheckGameFiles === true,
+    chinesePack: record.chinesePack && typeof record.chinesePack === 'object' ? record.chinesePack : null,
+
+    /* ---------------- HMCL 对齐的逐实例设置（2026-11-05 加）----------------
+     * ★ hydrate 是白名单：这里不列出来的字段会被静默丢掉（踩过）。
+     */
+
+    /** 版本隔离：'isolated'（各版本独立，默认）| 'default'（跟随全局共享目录） */
+    isolation: record.isolation === 'default' ? 'default' : 'isolated',
+
+    /** 游戏窗口类型：'windowed' | 'maximized' | 'fullscreen' */
+    windowType:
+      record.windowType === 'maximized' || record.windowType === 'fullscreen'
+        ? record.windowType
+        : 'windowed',
+
+    /** 逐实例分辨率覆盖（为空则跟随全局 game.resolution） */
+    resolution:
+      record.resolution && Number.isFinite(record.resolution.width) && Number.isFinite(record.resolution.height)
+        ? { width: record.resolution.width, height: record.resolution.height }
+        : null,
+
+    /** 不检查 Java 虚拟机与游戏的兼容性（照 HMCL settings.advanced.dont_check_jvm_validity） */
+    dontCheckJvmValidity: record.dontCheckJvmValidity === true,
+
+    /** 不尝试自动替换本地库（照 HMCL settings.advanced.dont_patch_natives） */
+    dontPatchNatives: record.dontPatchNatives === true,
+
+    /** 图形 API：'default' | 'opengl' | 'vulkan'（照 HMCL settings.advanced.graphics_backend，仅 26.2+ 生效） */
+    graphicsBackend:
+      record.graphicsBackend === 'opengl' || record.graphicsBackend === 'vulkan'
+        ? record.graphicsBackend
+        : 'default',
+
+    /** 快速游玩：{ type:'none'|'singleplayer'|'multiplayer', target:string } */
+    quickPlay:
+      record.quickPlay && typeof record.quickPlay === 'object'
+        ? {
+            type: ['singleplayer', 'multiplayer'].includes(record.quickPlay.type)
+              ? record.quickPlay.type
+              : 'none',
+            target: String(record.quickPlay.target || '')
+          }
+        : { type: 'none', target: '' },
+
+    /** 启动前自动补齐缺失的依赖库与资源（照「自动安装」语义） */
+    autoInstallDependencies: record.autoInstallDependencies !== false,
+
+    /** 找不到匹配 Java 时自动下载（照 HMCL settings.game.java_directory.auto） */
+    autoInstallJava: record.autoInstallJava !== false,
+  };
+}
+
+/** 把实例记录落盘（instance.json + 索引）。 */
+function persist(home, instance) {
+  const { dir, ...rest } = instance;
+  jsonstore.writeJson(paths.instanceJson(home, instance.id), rest);
+  addToIndex(home, instance.id);
+  return instance;
+}
+
+/** 列出全部实例；每个都带 dir 绝对路径。 */
+async function list(home) {
+  const root = paths.instancesDir(home);
+  paths.ensureDir(root);
+  const index = readIndex(home);
+  const ids = index.instances.slice();
+  const known = new Set(ids);
+
+  // 自愈：磁盘上有但索引里没有的实例目录也认（比如手工拷进来的）
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch (_) {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (known.has(entry.name)) continue;
+    if (fs.existsSync(paths.instanceJson(home, entry.name))) {
+      ids.push(entry.name);
+      known.add(entry.name);
+    }
+  }
+
+  const out = [];
+  for (const id of ids) {
+    const data = jsonstore.readJson(paths.instanceJson(home, id), null);
+    if (!data) continue; // 目录被删了但索引还在
+    out.push(hydrate(home, id, data));
+  }
+  out.sort((a, b) => b.created - a.created);
+  return out;
+}
+
+/** 取一个实例。 */
+async function get(home, id) {
+  if (!id) return null;
+  const data = jsonstore.readJson(paths.instanceJson(home, id), null);
+  if (!data) return null;
+  return hydrate(home, id, data);
+}
+
+/** 新建实例。 */
+async function create(home, input) {
+  const opts = input || {};
+  const name = String(opts.name || '').trim() || '新实例';
+  const mcVersion = String(opts.mcVersion || '').trim();
+
+  let id = opts.id ? paths.safeId(opts.id) : newId();
+  if (fs.existsSync(paths.instanceDir(home, id))) id = newId();
+
+  ensureInstanceLayout(home, id);
+  const instance = hydrate(home, id, {
+    name,
+    icon: opts.icon || 'grass',
+    mcVersion,
+    installedVersion: '',
+    loader: normalizeLoader(opts.loader),
+    java: { path: null, memoryMb: null },
+    created: Date.now(),
+    lastPlayed: null,
+    playTime: 0,
+    notes: '',
+  });
+  persist(home, instance);
+  return instance;
+}
+
+/** 删除实例（连同 .minecraft 一起删）。 */
+async function remove(home, id) {
+  const dir = paths.instanceDir(home, id);
+  fs.rmSync(dir, { recursive: true, force: true });
+  removeFromIndex(home, id);
+}
+
+/** 改名。 */
+async function rename(home, id, name) {
+  const instance = await get(home, id);
+  if (!instance) throw new Error(`实例不存在：${id}`);
+  instance.name = String(name || '').trim() || instance.name;
+  delete instance.dir;
+  jsonstore.writeJson(paths.instanceJson(home, id), instance);
+  return get(home, id);
+}
+
+/** 增量更新字段。 */
+async function update(home, id, patch) {
+  const current = jsonstore.readJson(paths.instanceJson(home, id), null);
+  if (!current) throw new Error(`实例不存在：${id}`);
+  const next = { ...current, ...(patch || {}) };
+  if (patch && patch.java) next.java = { ...(current.java || {}), ...patch.java };
+  if (patch && patch.loader !== undefined) next.loader = normalizeLoader(patch.loader);
+  jsonstore.writeJson(paths.instanceJson(home, id), next);
+  return hydrate(home, id, next);
+}
+
+/** 记录一次启动（lastPlayed + playTime 累加）。 */
+async function markPlayed(home, id, addMs) {
+  const current = jsonstore.readJson(paths.instanceJson(home, id), null);
+  if (!current) return null;
+  const now = Date.now();
+  const next = {
+    ...current,
+    lastPlayed: now,
+    playTime: (Number(current.playTime) || 0) + (Number(addMs) || 0),
+  };
+  jsonstore.writeJson(paths.instanceJson(home, id), next);
+  return hydrate(home, id, next);
+}
+
+/** 确保实例目录完整（启动前调一次，防止用户手工删了子目录）。 */
+async function ensure(home, id) {
+  const instance = await get(home, id);
+  if (!instance) throw new Error(`实例不存在：${id}`);
+  ensureInstanceLayout(home, id);
+  addToIndex(home, id);
+  return instance;
+}
+
+module.exports = {
+  LOADER_TYPES,
+  GAME_SUBDIRS,
+  list,
+  get,
+  create,
+  remove,
+  rename,
+  update,
+  ensure,
+  markPlayed,
+  newId,
+  normalizeLoader,
+  hydrate,
+};

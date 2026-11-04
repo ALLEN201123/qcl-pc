@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN" data-mode="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' file: data: blob:; script-src 'self' file: 'sha256-7vY3+gIbGiR8824NRry3UUH0Q4ycvB+O3NVBJkBhzc8='; style-src 'self' 'unsafe-inline' file:; img-src 'self' file: data: blob: https:; font-src 'self' file: data:; connect-src 'self' file:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Quanta Craft Launcher PC</title>
+    <!--
+      ★★★ importmap 必须写在任何 module 脚本之前，否则 `skin.js` 里的
+        `import * as THREE from 'three'` 会报
+        "Failed to resolve module specifier "three""，
+        整个 app.js 模块链直接断掉 → 界面永远停在「正在准备界面…」。
+      three 是本地 vendor 文件，不走 CDN（离线可用）。
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./vendor/three/three.module.js",
+          "three/addons/": "./vendor/three/jsm/"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="./css/base.css" />
+    <link rel="stylesheet" href="./css/layout.css" />
+    <link rel="stylesheet" href="./css/components.css" />
+    <link rel="stylesheet" href="./css/pages.css" />
+  </head>
+  <body>
+    <!-- #app 就是「卡片」：圆角以内每一个像素都由壁纸铺满，没有系统标题栏、没有灰底 -->
+    <div id="app" data-wallpaper="builtin:pale">
+      <div id="wallpaper" class="wallpaper" aria-hidden="true"></div>
+      <div id="wallpaper-veil" class="wallpaper-veil" aria-hidden="true"></div>
+
+      <!-- 自绘标题栏：整条可拖窗口，只有右上角三个按钮是 no-drag -->
+      <header id="titlebar" class="titlebar">
+        <div class="titlebar__drag">
+          <span class="titlebar__logo" aria-hidden="true"></span>
+          <span class="titlebar__title">Quanta Craft Launcher PC</span>
+          <span id="titlebar-status" class="titlebar__status"></span>
+        </div>
+        <div class="titlebar__buttons" id="win-buttons">
+          <button class="winbtn" id="win-min" type="button" title="最小化" aria-label="最小化"></button>
+          <button class="winbtn" id="win-max" type="button" title="最大化" aria-label="最大化"></button>
+          <button class="winbtn winbtn--close" id="win-close" type="button" title="关闭" aria-label="关闭"></button>
+        </div>
+      </header>
+
+      <!-- 三栏骨架：左常驻图标栏 64px / 中间内容区 / 右常驻栏 25% -->
+      <div class="shell">
+        <nav id="leftnav" class="leftnav" aria-label="主导航"></nav>
+        <section id="content" class="content" aria-live="polite"></section>
+        <aside id="rightpanel" class="rightpanel"></aside>
+      </div>
+
+      <!-- 全局浮层 -->
+      <div id="banner-root" class="banner-root"></div>
+      <div id="toast-root" class="toast-root" aria-live="polite"></div>
+      <div id="modal-root" class="modal-root" hidden></div>
+      <div id="splash" class="splash">
+        <div class="splash__spinner"></div>
+        <div class="splash__text">正在准备界面…</div>
+      </div>
+    </div>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>

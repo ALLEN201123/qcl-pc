@@ -1,0 +1,215 @@
+/* ============================================================================
+ * QCL 电脑版 · 基础层
+ * 设计令牌（CSS 变量）+ 昼夜成对配色 + 复位。
+ *
+ * 昼夜铁律：浅色态 = 近白半透明面板 + 深色文字；夜间态 = 深色半透明面板 + 白色文字。
+ * 绝不允许出现「深底黑字」「白底白字」——所以文字色永远由 --text* 变量给出，
+ * 而 --text* 与 --panel-rgb 在同一个选择器里成对翻转。
+ * ========================================================================= */
+
+:root {
+  /* ---- 布局（--inset 由主进程 win:state 事件驱动，最大化时变 0） ---- */
+  --inset: 18px;
+  --radius-card: 12px;
+  --radius-block: 10px;
+  --radius-pill: 999px;
+  --titlebar-h: 44px;
+  --gap: 12px;
+  --nav-w: 64px;
+  --right-w: 25%;
+  --blur: 18px;
+
+  /* ---- 主题色：默认 #865D58（苍白花园壁纸取色，安卓版 colorAccent 一致） ---- */
+  --accent: #865d58;
+  --accent-soft: #865d58; /* 由 JS 生成同色高透明版本 */
+  --accent-strong: #6d4a46; /* 由 JS 生成加深版本 */
+  --on-accent: #f2f6fa; /* 按钮文字：深底浅字，永不用白底黑字 */
+  --on-accent-dim: rgba(242, 246, 250, 0.72);
+
+  /* ---- 面板透明度（设置里的 面板透明度，默认 0.7 = 安卓版 #B3 的 alpha） ---- */
+  --panel-a: 0.7;
+
+  /* ---- 浅色态（日间）：近白半透明 + 深色文字 ---- */
+  --panel-rgb: 237, 237, 237;
+  --panel: rgba(var(--panel-rgb), var(--panel-a));
+  --panel-soft: rgba(var(--panel-rgb), calc(var(--panel-a) * 0.55));
+  --panel-strong: rgba(var(--panel-rgb), calc(var(--panel-a) + 0.2));
+  --block: rgba(255, 255, 255, 0.3); /* 右栏「版本行 / 启动游戏」块（安卓 qcl_launch_block_bg） */
+  --block-hover: rgba(255, 255, 255, 0.44);
+
+  --text: rgba(0, 0, 0, 0.9);
+  --text-2: rgba(0, 0, 0, 0.62);
+  --text-3: rgba(0, 0, 0, 0.42);
+  --line: rgba(0, 0, 0, 0.1);
+  --hover: rgba(0, 0, 0, 0.06);
+  --active: rgba(0, 0, 0, 0.12);
+  --field: rgba(255, 255, 255, 0.5);
+  --field-focus: rgba(255, 255, 255, 0.72);
+  --shadow-card: 0 12px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+  --shadow-pop: 0 10px 34px rgba(0, 0, 0, 0.32);
+
+  --danger: #b3402f;
+  --ok: #2f7d4a;
+  --warn: #9a6c14;
+  --info: #2b5f8f;
+
+  /* ---- 内容来源徽章（下载页：Modrinth 蓝 / CurseForge 橙） ---- */
+  --src-modrinth: #2f6fd0;
+  --src-curseforge: #b85c1a;
+
+  --veil: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02));
+
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
+    "Source Han Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "Sarasa Mono SC", "Noto Sans Mono CJK SC", monospace;
+
+  color-scheme: light;
+}
+
+/* ---- 夜间态：深色半透明 + 白色文字（与上面逐条成对） ---- */
+:root[data-mode="night"] {
+  --panel-rgb: 23, 28, 34;
+  --block: rgba(0, 0, 0, 0.35);
+  --block-hover: rgba(0, 0, 0, 0.5);
+
+  --text: #ffffff;
+  --text-2: rgba(255, 255, 255, 0.72);
+  --text-3: rgba(255, 255, 255, 0.5);
+  --line: rgba(255, 255, 255, 0.14);
+  --hover: rgba(255, 255, 255, 0.1);
+  --active: rgba(255, 255, 255, 0.18);
+  --field: rgba(0, 0, 0, 0.28);
+  --field-focus: rgba(0, 0, 0, 0.42);
+  --shadow-card: 0 12px 48px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+
+  --danger: #ff8f7d;
+  --ok: #7fd6a0;
+  --warn: #ffd479;
+  --info: #8ec4f0;
+
+  /* ---- 内容来源徽章：夜间用更亮的同色系，保证深底上看得清 ---- */
+  --src-modrinth: #8ec4f0;
+  --src-curseforge: #ffb27a;
+
+  /* 夜间遮罩：只压一点点，保住壁纸本身的色彩层次（压太狠会变成一团黑泥） */
+  --veil: linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.34));
+
+  color-scheme: dark;
+}
+
+/* ============================ 复位 ============================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* ★ 窗口是 transparent:true —— html/body 绝不能有不透明底色，否则圆角外会变白块/黑块 */
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+  /* 窗口比卡片大一圈：这一圈就是给卡片外阴影用的（最大化时 --inset 变 0） */
+  padding: var(--inset, 18px);
+  transition: padding 0.16s ease-out;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* 任何地方都不许出现原生滚动条白条，统一走自定义样式 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--text-3);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-2);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 可选中文本的地方（日志、错误详情）显式打开 */
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* ============================ 通用动画 ============================ */
+
+@keyframes qcl-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes qcl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes qcl-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+@keyframes qcl-shimmer {
+  from {
+    background-position: -240px 0;
+  }
+  to {
+    background-position: 240px 0;
+  }
+}
+
+/* 尊重系统「减少动态效果」 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

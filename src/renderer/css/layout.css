@@ -1,0 +1,554 @@
+/* ============================================================================
+ * QCL 电脑版 · 窗口融合层
+ *
+ * 「窗口边缘与界面完美融合」的全部实现都在这里：
+ *   1. body 的 padding = --inset（主进程给的阴影边距），卡片之外是真透明。
+ *   2. #app 圆角 12px、overflow hidden —— 圆角以内每一个像素都被壁纸铺满。
+ *   3. 壁纸 background-size: cover 铺满整张卡片，1920×1080 / 1600×900 都不变形。
+ *   4. 标题栏背景透明 —— 不许出现任何一条实色条。
+ *   5. 所有面板浮在壁纸上：backdrop-filter: blur(18px) + rgba() 底色。
+ * ========================================================================= */
+
+#app {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background-color: transparent;
+  box-shadow: var(--shadow-card);
+  isolation: isolate;
+}
+
+/* ---------------------------- 壁纸 ---------------------------- */
+
+/*
+  ★★★ 这里不能用 `background-image: var(--wallpaper, url(...))`。
+  CSS 变量替换后若得到 `url()/--` 这类「特殊类型」，整条声明会被判为无效值直接丢弃
+  （var() 的值只在属性值层面替换，不能把一个 var() 变成 background-image 的整值再参与解析），
+  结果就是整屏没有壁纸。改用一层独立元素的内联 style 由 JS 设置（见 theme.js），
+  这里只留一个最稳的默认背景作为兜底。
+*/
+.wallpaper {
+  position: absolute;
+  inset: 0;
+  background-image: url("../assets/wallpaper/ic_background.jpg");
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+  /* 铺满圆角以内所有像素，绝不出现灰底/白底 */
+  z-index: 0;
+  transition: filter 0.35s ease;
+}
+
+/* 昼夜遮罩：让面板文字在任何壁纸上都够对比度；日间几乎不动原图 */
+.wallpaper-veil {
+  position: absolute;
+  inset: 0;
+  background: var(--veil);
+  pointer-events: none;
+  z-index: 1;
+  transition: background 0.35s ease;
+}
+
+/* ---------------------------- 标题栏 ---------------------------- */
+
+.titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--titlebar-h);
+  display: flex;
+  align-items: stretch;
+  z-index: 40;
+  /* ★ 背景必须透明，不许出现一条实色条 */
+  background: transparent;
+  /* 整条可拖动窗口 */
+  -webkit-app-region: drag;
+}
+
+.titlebar__drag {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+  -webkit-app-region: drag;
+}
+
+.titlebar__logo {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  background-color: var(--text);
+  opacity: 0.85;
+  -webkit-mask-image: url("../assets/icon/ic_grass.png");
+  mask-image: url("../assets/icon/ic_grass.png");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  border-radius: 3px;
+}
+
+.titlebar__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titlebar__status {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-soft);
+  backdrop-filter: blur(8px);
+}
+.titlebar__status:empty {
+  display: none;
+}
+
+.titlebar__buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 8px;
+  /* 按钮区不可拖动，否则点不动 */
+  -webkit-app-region: no-drag;
+}
+
+.winbtn {
+  width: 36px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.winbtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.winbtn:active {
+  background: var(--active);
+}
+.winbtn svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+.winbtn--close:hover {
+  background: rgba(196, 60, 44, 0.92);
+  color: #fff;
+}
+.winbtn--close:active {
+  background: rgba(160, 44, 32, 0.95);
+}
+
+/* ---------------------------- 三栏骨架 ---------------------------- */
+
+.shell {
+  position: absolute;
+  inset: 0;
+  padding: calc(var(--titlebar-h) + 2px) var(--gap) var(--gap);
+  display: flex;
+  align-items: stretch;
+  gap: var(--gap);
+  z-index: 20;
+}
+
+/* ============================ 左常驻图标栏 ============================ */
+
+.leftnav {
+  flex: 0 0 var(--nav-w);
+  width: var(--nav-w);
+  border-radius: var(--radius-card);
+  background: var(--panel);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  border: 1px solid var(--line);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  /* ★ 图标垂直等分：flex:1 每项，绝不出现滚动条 */
+  gap: 4px;
+  overflow: hidden;
+}
+
+.navbtn {
+  flex: 1 1 0;
+  min-height: 0;
+  border: 0;
+  border-radius: var(--radius-block);
+  background: transparent;
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.14s ease, color 0.14s ease, transform 0.1s ease;
+}
+.navbtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.navbtn:active {
+  transform: scale(0.94);
+}
+/* 选中态高亮块（主题色底 + 浅字，和「按钮深底浅字」铁律一致） */
+.navbtn.is-active {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+.navbtn.is-active:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.navbtn.is-disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.navbtn.is-disabled:hover {
+  background: transparent;
+  color: var(--text-2);
+}
+
+.navbtn__icon {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+.navbtn__icon svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+/* PNG 图标用 mask 上色：日间深、夜间白，避免白图标糊在浅色板上 */
+.navbtn__mask {
+  width: 24px;
+  height: 24px;
+  display: block;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+/* 左栏底部的「返回」上方加一条分隔（照安卓 start_ui_home 的 marginTop） */
+.navbtn--back {
+  margin-top: 6px;
+  position: relative;
+}
+.navbtn--back::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: -5px;
+  height: 1px;
+  background: var(--line);
+}
+
+/* 悬浮提示（纯 CSS，无外部库） */
+.navbtn[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.96);
+  background: rgba(20, 22, 26, 0.92);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  padding: 7px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  z-index: 60;
+}
+.navbtn[data-tip]:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+/* ============================ 中间内容区 ============================ */
+
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+  border-radius: var(--radius-card);
+  /* 中间区默认透明：主页的公告卡与 3D 人物直接浮在壁纸上（照安卓新排版） */
+  background: transparent;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 二级页面自己铺一层浮层底板 */
+.page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: qcl-fade-in 0.18s ease-out;
+}
+.page--bare {
+  background: transparent;
+}
+.page--panel {
+  border-radius: var(--radius-card);
+  background: var(--panel);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.page__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.page__title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.page__sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.page__spacer {
+  flex: 1 1 auto;
+}
+.page__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px;
+}
+.page__body--flush {
+  padding: 0;
+}
+
+/* ============================ 右常驻栏 ============================ */
+
+.rightpanel {
+  flex: 0 0 var(--right-w);
+  width: var(--right-w);
+  min-width: 200px;
+  max-width: 360px;
+  border-radius: var(--radius-card);
+  background: var(--panel);
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
+  border: 1px solid var(--line);
+  padding: 12px 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+/* 账号区：在「顶部 ~ 版本行」之间垂直居中 */
+.account {
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: var(--radius-card);
+  color: inherit;
+  padding: 8px;
+  transition: background 0.14s ease;
+}
+.account:hover {
+  background: var(--hover);
+}
+.account:active {
+  background: var(--active);
+}
+
+.account__avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  background: var(--field);
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+}
+.account__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.account__name {
+  font-size: 16px;
+  font-weight: 700;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account__state {
+  font-size: 12px;
+  color: var(--text-3);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 底部两块：版本行在上、启动按钮贴底，同宽同高、圆角半透明 */
+.rightpanel__bottom {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.block {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-block);
+  background: var(--block);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 10px;
+  min-height: 46px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.14s ease, transform 0.1s ease, color 0.14s ease;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.block:hover {
+  background: var(--block-hover);
+}
+.block:active {
+  transform: scale(0.985);
+}
+.block__icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 4px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.block__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.block--primary {
+  /* ★ 深底浅字：底色 = 主题色，文字 #F2F6FA */
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.block--primary:hover {
+  background: var(--accent-strong);
+}
+.block--primary:active {
+  background: var(--accent-strong);
+}
+.block--primary.is-busy {
+  opacity: 0.85;
+  cursor: progress;
+}
+.block.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================ 窄窗口适配 ============================ */
+
+/* minWidth 是 980 —— 把右侧栏收窄、字号微调，避免出现横向滚动 */
+@media (max-width: 1180px) {
+  :root {
+    --right-w: 26%;
+    --gap: 10px;
+  }
+  .rightpanel {
+    padding: 10px;
+  }
+  .account__avatar {
+    width: 56px;
+    height: 56px;
+  }
+}
+
+/* ============================ 启动闪屏 ============================ */
+
+.splash {
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--panel-strong);
+  backdrop-filter: blur(var(--blur));
+  transition: opacity 0.25s ease;
+}
+.splash.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.splash__spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  border-top-color: var(--accent);
+  animation: qcl-spin 0.9s linear infinite;
+}
+.splash__text {
+  font-size: 13px;
+  color: var(--text-2);
+}

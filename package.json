@@ -1,0 +1,24 @@
+{
+  "name": "qcl-pc",
+  "productName": "Quanta Craft Launcher PC",
+  "version": "1.0.0",
+  "description": "Quanta Craft Launcher PC（QCL PC）· 量子方块启动器电脑版 · Minecraft: Java Edition 启动器",
+  "author": "Rod123456",
+  "license": "GPL-3.0",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "start:safe": "electron . --no-sandbox --disable-gpu --user-data-dir=.cache/userdata",
+    "dev": "electron . --dev",
+    "pack": "electron-builder --config electron-builder.config.js --win --x64 --dir",
+    "build": "electron-builder --config electron-builder.config.js --win portable --x64",
+    "icon": "python build/make-icon.py"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  }
+}

@@ -1,0 +1,461 @@
+{
+  "_comment": "从安卓版 LegacyChinesePack.java 抽取的中文补丁规则表。regex 匹配版本 id；dir 是补丁资源目录（src/main/core/data/<dir>/）；fontClass 是该版本自己的 FontRenderer 混淆名（可能是简单名如 sj，也可能是完整路径 com/mojang/minecraft/b/h）。",
+  "generatedAt": "2026-11-04T15:17:04.122Z",
+  "source": "D:\\QCL-build\\QCL\\src\\main\\java\\com\\qcl\\launcher\\launcher\\download\\game\\LegacyChinesePack.java",
+  "b19": [
+    {
+      "regex": "b1\\.9-pre2$",
+      "dir": "cn_b19pre2",
+      "fontClass": "lf"
+    },
+    {
+      "regex": "b1\\.9-pre3-1402$",
+      "dir": "cn_b19pre31402",
+      "fontClass": "ls"
+    },
+    {
+      "regex": "b1\\.9-pre4-1415$",
+      "dir": "cn_b19pre41415",
+      "fontClass": "mc"
+    },
+    {
+      "regex": "b1\\.9-pre5$",
+      "dir": "cn_b19pre5",
+      "fontClass": "mb"
+    },
+    {
+      "regex": "b1\\.9-pre6$",
+      "dir": "cn_b19pre6",
+      "fontClass": "mf"
+    }
+  ],
+  "extra": [
+    {
+      "regex": "(a1\\.0\\.1_01)$",
+      "dir": "cn_a1g01",
+      "fontClass": "em"
+    },
+    {
+      "regex": "(a1\\.0\\.10)$",
+      "dir": "cn_a1g02",
+      "fontClass": "jd"
+    },
+    {
+      "regex": "(a1\\.0\\.11)$",
+      "dir": "cn_a1g03",
+      "fontClass": "jl"
+    },
+    {
+      "regex": "(a1\\.0\\.12)$",
+      "dir": "cn_a1g04",
+      "fontClass": "jm"
+    },
+    {
+      "regex": "(a1\\.0\\.13|a1\\.0\\.13_01-1038|a1\\.0\\.13_01-1444)$",
+      "dir": "cn_a1g05",
+      "fontClass": "jn"
+    },
+    {
+      "regex": "(a1\\.0\\.14-1603|a1\\.0\\.14-1659)$",
+      "dir": "cn_a1g06",
+      "fontClass": "jp"
+    },
+    {
+      "regex": "(a1\\.0\\.15)$",
+      "dir": "cn_a1g07",
+      "fontClass": "js"
+    },
+    {
+      "regex": "(a1\\.0\\.16|a1\\.0\\.16_01|a1\\.0\\.16_02)$",
+      "dir": "cn_a1g08",
+      "fontClass": "jt"
+    },
+    {
+      "regex": "(a1\\.0\\.17_02|a1\\.0\\.17_03|a1\\.0\\.17_04)$",
+      "dir": "cn_a1g09",
+      "fontClass": "kb"
+    },
+    {
+      "regex": "(a1\\.0\\.2_01|a1\\.0\\.2_02|a1\\.0\\.3)$",
+      "dir": "cn_a1g10",
+      "fontClass": "em"
+    },
+    {
+      "regex": "(a1\\.0\\.4)$",
+      "dir": "cn_a1g11",
+      "fontClass": "eo"
+    },
+    {
+      "regex": "(a1\\.0\\.5-2149)$",
+      "dir": "cn_a1g12",
+      "fontClass": "id"
+    },
+    {
+      "regex": "(a1\\.0\\.5_01)$",
+      "dir": "cn_a1g13",
+      "fontClass": "ie"
+    },
+    {
+      "regex": "(a1\\.0\\.6|a1\\.0\\.6_01|a1\\.0\\.6_03)$",
+      "dir": "cn_a1g14",
+      "fontClass": "iu"
+    },
+    {
+      "regex": "(a1\\.0\\.7)$",
+      "dir": "cn_a1g15",
+      "fontClass": "iw"
+    },
+    {
+      "regex": "(a1\\.0\\.8_01)$",
+      "dir": "cn_a1g16",
+      "fontClass": "iy"
+    },
+    {
+      "regex": "(a1\\.0\\.9)$",
+      "dir": "cn_a1g17",
+      "fontClass": "iz"
+    },
+    {
+      "regex": "(a1\\.1\\.0-101847|a1\\.1\\.0-131933|a1\\.1\\.1|a1\\.1\\.2|a1\\.1\\.2_01)$",
+      "dir": "cn_a1g18",
+      "fontClass": "kd"
+    },
+    {
+      "regex": "(a1\\.2\\.0|a1\\.2\\.0_01|a1\\.2\\.0_02|a1\\.2\\.1_01)$",
+      "dir": "cn_a1g19",
+      "fontClass": "lg"
+    },
+    {
+      "regex": "(a1\\.2\\.2-1624|a1\\.2\\.2-1938)$",
+      "dir": "cn_a1g20",
+      "fontClass": "ln"
+    },
+    {
+      "regex": "(a1\\.2\\.3)$",
+      "dir": "cn_a1g21",
+      "fontClass": "lq"
+    },
+    {
+      "regex": "(a1\\.2\\.5)$",
+      "dir": "cn_a1g22",
+      "fontClass": "lr"
+    },
+    {
+      "regex": "(a1\\.2\\.6)$",
+      "dir": "cn_a1g23",
+      "fontClass": "ls"
+    },
+    {
+      "regex": "b1\\.2_02-dev.*$",
+      "dir": "cn_b1202dev",
+      "fontClass": "net/minecraft/client/gui/Font"
+    },
+    {
+      "regex": "b1\\.2(_0[12])?$",
+      "dir": "cn_b12",
+      "fontClass": "nh"
+    },
+    {
+      "regex": "b1\\.3-(1713|1733|1750)$",
+      "dir": "cn_b13",
+      "fontClass": "oi"
+    },
+    {
+      "regex": "b1\\.3_01$",
+      "dir": "cn_b13",
+      "fontClass": "oi"
+    },
+    {
+      "regex": "b1\\.3-pcgamer_demo$",
+      "dir": "cn_b13demo",
+      "fontClass": "ok"
+    },
+    {
+      "regex": "b1\\.4-1507$",
+      "dir": "cn_b14",
+      "fontClass": "ox"
+    },
+    {
+      "regex": "b1\\.4-1634$",
+      "dir": "cn_b14",
+      "fontClass": "ox"
+    },
+    {
+      "regex": "b1\\.4_01$",
+      "dir": "cn_b14",
+      "fontClass": "ox"
+    },
+    {
+      "regex": "b1\\.5(_01)?$",
+      "dir": "cn_b15",
+      "fontClass": "rf"
+    },
+    {
+      "regex": "b1\\.6-test_build_3$",
+      "dir": "cn_166t",
+      "fontClass": "se"
+    },
+    {
+      "regex": "b1\\.7(_01|\\.2)?$",
+      "dir": "cn_b17",
+      "fontClass": "sj"
+    },
+    {
+      "regex": "b1\\.8-pre1-081459$",
+      "dir": "cn_b18pre1",
+      "fontClass": "kg"
+    },
+    {
+      "regex": "b1\\.8-pre1-091357$",
+      "dir": "cn_b18pre1",
+      "fontClass": "kg"
+    },
+    {
+      "regex": "b1\\.8-pre2-121559$",
+      "dir": "cn_b18pre2",
+      "fontClass": "kh"
+    },
+    {
+      "regex": "b1\\.8-pre2-131225$",
+      "dir": "cn_b18pre2",
+      "fontClass": "kh"
+    },
+    {
+      "regex": "b1\\.9-pre$",
+      "dir": "cn_b19pre",
+      "fontClass": "lc"
+    },
+    {
+      "regex": "b1\\.9-pre3-1350$",
+      "dir": "cn_b19pre31350",
+      "fontClass": "ls"
+    },
+    {
+      "regex": "b1\\.9-pre4-1434$",
+      "dir": "cn_b19pre41434",
+      "fontClass": "mc"
+    },
+    {
+      "regex": "inf-(20100227-1433|20100313|20100316|20100320|20100325-1640)$",
+      "dir": "cn_inf_g1",
+      "fontClass": "net/minecraft/client/c/j"
+    },
+    {
+      "regex": "inf-20100321-1857$",
+      "dir": "cn_inf_g2",
+      "fontClass": "net/minecraft/client/c/j"
+    },
+    {
+      "regex": "inf-(20100327|20100330-1611|20100413-1953|20100414)$",
+      "dir": "cn_inf_g3",
+      "fontClass": "net/minecraft/client/c/k"
+    },
+    {
+      "regex": "inf-(20100415|20100420|20100607|20100608|20100611|20100615|20100616-1808|20100617-1205|20100617-1531|20100618)$",
+      "dir": "cn_inf_g4",
+      "fontClass": "net/minecraft/client/c/k"
+    },
+    {
+      "regex": "inf-(20100624|20100625-0922|20100625-1917)$",
+      "dir": "cn_inf_g5",
+      "fontClass": "net/minecraft/client/c/k"
+    },
+    {
+      "regex": "inf-20100627$",
+      "dir": "cn_inf_g6",
+      "fontClass": "ef"
+    },
+    {
+      "regex": "inf-20100629$",
+      "dir": "cn_inf_g7",
+      "fontClass": "ef"
+    },
+    {
+      "regex": "inf-20100630-(1340|1835)$",
+      "dir": "cn_inf_g8",
+      "fontClass": "ej"
+    },
+    {
+      "regex": "in-(20100202-2330|20100206-2103|20100207-1101|20100207-1703|20100212-1210|20100212-1622|20100213|20100214|20100219|20100223)$",
+      "dir": "cn_indev_g7",
+      "fontClass": "net/minecraft/client/c/j"
+    },
+    {
+      "regex": "in-20100110$",
+      "dir": "cn_indev_g2",
+      "fontClass": "net/minecraft/client/b/i"
+    },
+    {
+      "regex": "in-(20100124-2310|20100125)$",
+      "dir": "cn_indev_g3",
+      "fontClass": "net/minecraft/client/b/k"
+    },
+    {
+      "regex": "in-(20100128-2304|20100129-1452)$",
+      "dir": "cn_indev_g4",
+      "fontClass": "net/minecraft/client/b/n"
+    },
+    {
+      "regex": "in-20100130$",
+      "dir": "cn_indev_g5",
+      "fontClass": "net/minecraft/client/b/l"
+    },
+    {
+      "regex": "in-(20100131-2244|20100201-0025|20100201-2227)$",
+      "dir": "cn_indev_g6",
+      "fontClass": "net/minecraft/client/b/j"
+    },
+    {
+      "regex": "in-20091223-1459$",
+      "dir": "cn_indev_g8",
+      "fontClass": "net/minecraft/client/d/p"
+    },
+    {
+      "regex": "in-20091231-2255$",
+      "dir": "cn_indev_g9",
+      "fontClass": "net/minecraft/client/c/q"
+    },
+    {
+      "regex": "in-20100104-2258$",
+      "dir": "cn_indev_g10",
+      "fontClass": "net/minecraft/client/b/i"
+    },
+    {
+      "regex": "in-20100218-0016$",
+      "dir": "cn_indev_g7",
+      "fontClass": "net/minecraft/client/c/j"
+    },
+    {
+      "regex": "(c0\\.0\\.14a_08|c0\\.0\\.15a-05311904)$",
+      "dir": "cn_classic_g1",
+      "fontClass": "com/mojang/minecraft/b/h"
+    },
+    {
+      "regex": "(c0\\.0\\.16a_02-081047|c0\\.0\\.17a-2014)$",
+      "dir": "cn_classic_g2",
+      "fontClass": "com/mojang/minecraft/b/j"
+    },
+    {
+      "regex": "(c0\\.0\\.18a_02)$",
+      "dir": "cn_classic_g3",
+      "fontClass": "com/mojang/minecraft/b/j"
+    },
+    {
+      "regex": "(c0\\.0\\.19a_04|c0\\.0\\.19a_06-0137)$",
+      "dir": "cn_classic_g4",
+      "fontClass": "com/mojang/minecraft/b/k"
+    },
+    {
+      "regex": "(c0\\.0\\.20a_01|c0\\.0\\.20a_02|c0\\.0\\.21a-2008|c0\\.0\\.21a_01)$",
+      "dir": "cn_classic_g5",
+      "fontClass": "com/mojang/minecraft/b/l"
+    },
+    {
+      "regex": "(c0\\.0\\.13a_03|c0\\.0\\.13a_03-renew)$",
+      "dir": "cn_classic_g6",
+      "fontClass": "com/mojang/minecraft/c/g"
+    },
+    {
+      "regex": "(c0\\.0\\.22a_05)$",
+      "dir": "cn_classic_g7",
+      "fontClass": "com/mojang/minecraft/c/h"
+    },
+    {
+      "regex": "(c0\\.24_st_03|c0\\.25_05_st)$",
+      "dir": "cn_classic_g8",
+      "fontClass": "com/mojang/minecraft/c/k"
+    },
+    {
+      "regex": "(c0\\.27_st)$",
+      "dir": "cn_classic_g9",
+      "fontClass": "com/mojang/minecraft/c/k"
+    },
+    {
+      "regex": "(c0\\.0\\.23a_01)$",
+      "dir": "cn_classic_g10",
+      "fontClass": "com/mojang/minecraft/c/l"
+    },
+    {
+      "regex": "(c0\\.28_01|c0\\.29|c0\\.29_01|c0\\.29_02|c0\\.30-c-1900|c0\\.30-c-1900-renew|c0\\.30-s-1858)$",
+      "dir": "cn_classic_g11",
+      "fontClass": "com/mojang/minecraft/e/l"
+    },
+    {
+      "regex": "(c0\\.0\\.13a-dev)$",
+      "dir": "cn_classic_g12",
+      "fontClass": "com/mojang/minecraft/gui/Font"
+    }
+  ],
+  "dirs": [
+    "cn_b19pre2",
+    "cn_b19pre31402",
+    "cn_b19pre41415",
+    "cn_b19pre5",
+    "cn_b19pre6",
+    "cn_a1g01",
+    "cn_a1g02",
+    "cn_a1g03",
+    "cn_a1g04",
+    "cn_a1g05",
+    "cn_a1g06",
+    "cn_a1g07",
+    "cn_a1g08",
+    "cn_a1g09",
+    "cn_a1g10",
+    "cn_a1g11",
+    "cn_a1g12",
+    "cn_a1g13",
+    "cn_a1g14",
+    "cn_a1g15",
+    "cn_a1g16",
+    "cn_a1g17",
+    "cn_a1g18",
+    "cn_a1g19",
+    "cn_a1g20",
+    "cn_a1g21",
+    "cn_a1g22",
+    "cn_a1g23",
+    "cn_b1202dev",
+    "cn_b12",
+    "cn_b13",
+    "cn_b13demo",
+    "cn_b14",
+    "cn_b15",
+    "cn_166t",
+    "cn_b17",
+    "cn_b18pre1",
+    "cn_b18pre2",
+    "cn_b19pre",
+    "cn_b19pre31350",
+    "cn_b19pre41434",
+    "cn_inf_g1",
+    "cn_inf_g2",
+    "cn_inf_g3",
+    "cn_inf_g4",
+    "cn_inf_g5",
+    "cn_inf_g6",
+    "cn_inf_g7",
+    "cn_inf_g8",
+    "cn_indev_g7",
+    "cn_indev_g2",
+    "cn_indev_g3",
+    "cn_indev_g4",
+    "cn_indev_g5",
+    "cn_indev_g6",
+    "cn_indev_g8",
+    "cn_indev_g9",
+    "cn_indev_g10",
+    "cn_classic_g1",
+    "cn_classic_g2",
+    "cn_classic_g3",
+    "cn_classic_g4",
+    "cn_classic_g5",
+    "cn_classic_g6",
+    "cn_classic_g7",
+    "cn_classic_g8",
+    "cn_classic_g9",
+    "cn_classic_g10",
+    "cn_classic_g11",
+    "cn_classic_g12"
+  ]
+}
