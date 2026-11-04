@@ -43,6 +43,16 @@ function applyWindowsMetadata(appOutDir) {
     console.warn('[QCL] 没找到 rcedit，跳过图标/版本信息写入');
     return;
   }
+  /**
+   * ★ 版本号必须跟 package.json 走，别写死。
+   *   以前写死 1.0.0.0 —— package.json 升到 1.0.1 之后，
+   *   程序里「关于」显示 1.0.1、右键属性却还是 1.0.0，玩家会以为装错了。
+   */
+  const pkgVersion = String(require('./package.json').version || '0.0.0');
+  // 文件版本要 4 段：1.0.1 → 1.0.1.0
+  const parts = pkgVersion.split('.').slice(0, 3);
+  while (parts.length < 4) parts.push('0');
+  const fileVersion = parts.slice(0, 4).join('.');
   const args = [
     exe,
     '--set-version-string', 'ProductName', 'Quanta Craft Launcher PC',
@@ -51,8 +61,8 @@ function applyWindowsMetadata(appOutDir) {
     '--set-version-string', 'LegalCopyright', 'GPL-3.0 · Quanta Craft Launcher',
     '--set-version-string', 'OriginalFilename', 'QCL.exe',
     '--set-version-string', 'InternalName', 'QCL',
-    '--set-file-version', '1.0.0.0',
-    '--set-product-version', '1.0.0'
+    '--set-file-version', fileVersion,
+    '--set-product-version', pkgVersion
   ];
   if (fs.existsSync(ICON_ICO)) args.push('--set-icon', ICON_ICO);
   else console.warn('[QCL] 没找到 build/icon.ico，只改版本信息');
