@@ -1194,6 +1194,42 @@ const handlers = {
     }
   },
 
+  // ---------- 说明页（设置 → 关于 → 使用说明）----------
+  /**
+   * 通道：app:help
+   *
+   * 给渲染层的「使用说明」页提供**真实数字**，别在页面上写死：
+   *   · 中文补丁：规则数 / 实际可用的包目录数（安卓版移植过来 77 组）
+   *   · Betacraft 归档清单：内置 JSON 的条数
+   * 任何一段取不到都不抛异常，对应字段返回 null，页面自己降级。
+   */
+  'app:help': async () => {
+    const out = {
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      chinesePack: null,
+      archive: null
+    };
+    try {
+      const cp = require('./core/chinesepack');
+      const st = cp.stats();
+      out.chinesePack = { rules: st.rules, dirs: st.dirsAvailable, patterns: cp.supportedPatterns().length };
+    } catch {
+      /* 中文补丁模块异常不影响说明页 */
+    }
+    try {
+      const arc = require('./core/data/legacy_version_archive.json');
+      out.archive = {
+        count: Number(arc && arc.count) || (Array.isArray(arc && arc.entries) ? arc.entries.length : 0),
+        source: (arc && arc.source) || ''
+      };
+    } catch {
+      /* 归档清单缺失也不影响 */
+    }
+    return out;
+  },
+
   // ---------- 内容下载（Modrinth + CurseForge 镜像，core/contentapi.js） ----------
   /**
    * 通道：content:sources / content:search / content:project / content:versions /

@@ -931,6 +931,7 @@ export const settingPage = {
           </div>
           <div class="hstack" style="margin-top:12px">
             <button class="btn" id="st-openabout" type="button">打开「关于 QCL」页面</button>
+            <button class="btn" id="st-openhelp" type="button">${raw(icon('info', 14))}使用说明</button>
             <button class="btn btn--ghost" id="st-opengithub" type="button">${raw(icon('external', 14))}GitHub 仓库</button>
             <button class="btn btn--ghost" id="st-openhome" type="button">${raw(icon('folder', 14))}打开主目录</button>
           </div>
@@ -951,6 +952,7 @@ export const settingPage = {
         </div>`
       );
       pane.querySelector('#st-openabout').addEventListener('click', () => router.navigate('about'));
+      pane.querySelector('#st-openhelp').addEventListener('click', () => router.navigate('help'));
       pane.querySelector('#st-opengithub').addEventListener('click', async () => {
         const r = await call('shell:openExternal', { url: 'https://github.com/ALLEN201123/qcl-pc' });
         if (!r.ok) toast(r.error || '打开仓库失败', 'error', 5000);

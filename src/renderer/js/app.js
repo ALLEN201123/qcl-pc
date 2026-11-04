@@ -31,6 +31,8 @@ import { accountsPage } from './pages/accounts.js';
 import { settingPage } from './pages/setting.js';
 import { logPage } from './pages/log.js';
 import { aboutPage } from './pages/about.js';
+// ★ 说明页：中文补丁（安卓版移植）与「中国版 Betacraft」那套远古版本支持，全在 src/pages/help.js
+import { helpPage } from './pages/help.js';
 // ★ 「实验室」与「JAR 启动」是手机功能，PC 上不适用：
 //   实验室 → 换成「工具」（实例文件夹 / 崩溃分析 / 实例备份）
 //   JAR 启动 → 直接移除（PC 上双击 jar 或走实例启动即可）
@@ -71,6 +73,7 @@ const PAGES = [
   settingPage,
   logPage,
   aboutPage,
+  helpPage,
   toolsPage,
   modsPage,
   multiplayerPage,

@@ -38,6 +38,8 @@ const NAV_ITEMS = [
   { id: 'mods', tip: '模组管理', kind: 'svg', glyph: 'pack' },
   { id: 'multiplayer', tip: '多人联机', kind: 'svg', glyph: 'multiplayer' },
   { id: 'setting', tip: '设置', kind: 'svg', glyph: 'setting' },
+  // ★ 使用说明（中文补丁怎么来的 / 远古版本为什么叫中国版 Betacraft / 加载器怎么选）
+  { id: 'help', tip: '使用说明', kind: 'svg', glyph: 'info' },
   { id: 'back', tip: '返回上一层', kind: 'svg', glyph: 'back', back: true },
 ];
 

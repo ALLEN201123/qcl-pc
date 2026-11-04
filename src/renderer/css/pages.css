@@ -1376,3 +1376,125 @@ button.dl__follow:hover {
   color: var(--text);
   cursor: default;
 }
+
+/* ===================== 使用说明页（中文补丁 / 远古版本 / 加载器） ===================== */
+
+.doc {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.doc__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+}
+.doc__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.doc__tab:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.doc__tab.is-active {
+  background: var(--panel);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+.doc__tab svg { opacity: .85; }
+
+.doc__content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.doc__text {
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: var(--text-2);
+}
+.doc__text strong { color: var(--text); }
+.doc__text ol,
+.doc__text ul { margin: 6px 0 0 18px; }
+.doc__text li { margin: 3px 0; }
+
+.doc__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.doc__table th,
+.doc__table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  line-height: 1.7;
+}
+.doc__table th {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--panel-soft);
+  white-space: nowrap;
+}
+.doc__table td { color: var(--text-2); }
+.doc__table tr:last-child td { border-bottom: none; }
+
+.doc__steps {
+  margin: 10px 0 0 20px;
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: var(--text-2);
+}
+.doc__steps li { margin: 4px 0; }
+
+.doc__hint {
+  margin-top: 10px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+  border-left: 3px solid var(--accent);
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--text-2);
+}
+
+.doc__pre {
+  margin-top: 10px;
+  padding: 11px 13px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.doc__foot {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3, var(--text-2));
+  opacity: .75;
+}

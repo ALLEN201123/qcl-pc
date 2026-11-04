@@ -8,6 +8,7 @@ import { call } from '../bridge.js';
 import { state } from '../store.js';
 import { html, raw, setHTML, toast } from '../ui.js';
 import { icon } from '../icons.js';
+import * as router from '../router.js';
 
 /** ★ QCL 电脑版自己的仓库（2026-11-05 已建好；安卓版是 Quanta-Craft-Launcher，别混） */
 const GITHUB = 'https://github.com/ALLEN201123/qcl-pc';
@@ -93,6 +94,7 @@ export const aboutPage = {
             <div class="card">
               <div class="card__title">链接</div>
               <div class="hstack" style="flex-wrap:wrap;gap:8px">
+                <button class="btn" id="ab-help" type="button">${raw(icon('info', 14))}使用说明（中文补丁 / 远古版本）</button>
                 <button class="btn" id="ab-github" type="button">${raw(icon('external', 14))}GitHub 仓库</button>
                 <button class="btn btn--ghost" id="ab-releases" type="button">${raw(icon('external', 14))}下载最新版</button>
                 <button class="btn btn--ghost" id="ab-bili" type="button">${raw(icon('external', 14))}作者的 B 站</button>
@@ -125,6 +127,7 @@ export const aboutPage = {
       if (!r.ok) toast(r.error || `打开${label}失败`, 'error', 5000);
     }
 
+    mount.querySelector('#ab-help').addEventListener('click', () => router.navigate('help'));
     mount.querySelector('#ab-github').addEventListener('click', () => open(GITHUB, 'GitHub 仓库'));
     mount.querySelector('#ab-releases').addEventListener('click', () => open(RELEASES, '下载页'));
     mount.querySelector('#ab-bili').addEventListener('click', () => open(BILI, 'B 站主页'));
