@@ -2064,3 +2064,46 @@
   color: var(--text-2);
   opacity: .8;
 }
+/* 「另外一起装」面板：OptiFine 可叠加项 + 前置 API */
+.loader-extras {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.loader-extras__title {
+  font-size: 12.5px;
+  color: var(--text);
+}
+.loader-of {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.loader-of__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.loader-of__check input { margin: 0; }
+.loader-of__ver { max-width: 170px; font-size: 11.5px; padding: 3px 6px; }
+.loader-of__hint {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--text-2);
+  opacity: .85;
+}
+.loader-extras .loader-compats {
+  margin-top: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}

@@ -290,14 +290,32 @@ app.whenReady().then(async () => {
       }
       push('E3 前置依赖弹窗真的弹出', !!depInfo, depInfo);
     }
+    /* ============ F/G/H. 安装对话框：实例名 / 加载器版本 / OptiFine 可叠加 ============ */
 
-    /* ============ F. 新建实例 + 自定义实例名（用户反馈的那条） ============ */
-    // 前面 E 段可能留下了「版本选择 / 依赖」弹窗，先清干净，否则会挡住新的弹窗
+    /** 打开某个版本的安装对话框，可指定「安装到」 */
+    const openFor = async (versionId, target) => {
+      await closeModal();
+      const opened = await openModal(versionId, 'release', target);
+      await sleep(800);
+      return opened;
+    };
+
+    /** 等某个 loader 的版本下拉被灌满（查询是异步的） */
+    const waitSel = async (type, min) => {
+      for (let i = 0; i < 40; i++) {
+        const n = await js(
+          `(function(){var s=document.querySelector('[data-selver="${type}"]'); return s?s.options.length:0;})()`
+        );
+        if (n >= (min || 1)) return n;
+        await sleep(500);
+      }
+      return 0;
+    };
+
+    // 先自己进「游戏」分类 → 正式版，并清掉 E 段留下的「游戏版本」筛选
     await closeModal();
-    // 自己进「游戏」分类并搜 1.20.1（E 段停在模组页，那里没有「安装到」下拉）
     await js(`(document.querySelector('.dlcat[data-cat="game"]')||{click(){}}).click();`);
-    await sleep(1500);
-    // ★ E 段为了查模组把「游戏版本」筛成了 1.20.1；回到游戏分类前清掉，否则版本列表会被过滤成空
+    await sleep(1200);
     await js(
       `(function(){var el=document.getElementById('dl-mcver'); if(el){el.value=''; el.dispatchEvent(new Event('input',{bubbles:true}));}})()`
     );
@@ -305,156 +323,159 @@ app.whenReady().then(async () => {
     await js(
       `(function(){var el=document.getElementById('dl-search'); if(el){el.value='1.20.1'; el.dispatchEvent(new Event('input',{bubbles:true}));}})()`
     );
-    await js(`(document.getElementById('dl-do-search')||{click(){}}).click();`);
-    await sleep(4000);
+    await sleep(500);
 
-    const listDiag = await js(
-      `(function(){var c=document.getElementById('dl-count'); var l=document.getElementById('dl-list');
-        return {count:(c||{}).textContent||'', children:l?l.children.length:0,
-                firstClass:l&&l.firstElementChild?l.firstElementChild.className:'',
-                head:(l?l.textContent:'').replace(/\\s+/g,' ').slice(0,120)};})()`
-    );
-    // 诊断信息：此刻还停在 D 段留下的「远古版本」分页，列表自然是 0 条；
-    // 真正的翻页由下面 openModal(..., 'release') 负责，所以这里只记录、不判定。
-    push('F0 版本列表状态（诊断）', true, listDiag);
-
+    // ---- F1：「安装到」下拉有「＋ 新建实例…」 ----
     const targetOpts = await js(
       `(function(){var s=document.getElementById('dl-target'); if(!s) return null;
         return Array.from(s.options).map(function(o){return {v:o.value,t:o.textContent.trim()};});})()`
     );
-    const newOpt = (targetOpts || []).find((x) => x.v === '__new__');
-    push('F1「安装到」下拉有「＋ 新建实例…」', !!newOpt, targetOpts);
+    push('F1「安装到」下拉有「＋ 新建实例…」', !!(targetOpts || []).find((x) => x.v === '__new__'), targetOpts);
 
-    const pickAndInstall = async (target) => {
-      await closeModal();
-      // ★ 必须显式回「正式版」分页：D 段把游戏分类切到了「远古版本」，状态会记住，
-      //   否则搜 1.20.1 一版都匹配不到（实测「共 197 个远古版本，显示 0 个」）。
-      const opened = await openModal('1.20.1', 'release', target);
-      await sleep(800);
-      const modalInfo = await js(
-        `(function(){var r=document.getElementById('modal-root');
-          return {hidden:!!r.hidden, cls:(r.firstElementChild||{}).className||'',
-                  hasName:!!document.getElementById('ld-name'),
-                  hasLoader:!!document.querySelector('.modal--loader'),
-                  target:(document.getElementById('dl-target')||{}).value};})()`
-      );
-      return { opened, modalInfo };
-    };
-
-    // ② 选「新建」→ 弹窗里出现实例名输入框，默认名已去重
+    // ---- F2~F6：新建模式下的实例名 ----
     rec.create = null;
-    const f2 = await pickAndInstall('__new__');
-    result.f2diag = f2;
+    const fOpen = await openFor('1.20.1', '__new__');
     const nameField = await js(
       `(function(){var i=document.getElementById('ld-name'); if(!i) return null;
         return {value:i.value, placeholder:i.placeholder, focused:(document.activeElement===i)};})()`
     );
-    push('F2 新建模式下弹窗有「实例名称」输入框', !!nameField, f2);
+    push('F2 弹窗里有「实例名称」输入框', !!(fOpen && fOpen.ok && nameField), { open: fOpen, name: nameField });
     push('F3 默认名是「1.20.1 Fabric」格式', !!(nameField && /^1\.20\.1\s+Fabric$/.test(nameField.value)), nameField && nameField.value);
     push('F4 输入框自动获得焦点', !!(nameField && nameField.focused), nameField && nameField.focused);
-    const compatInfo = await js(`(function(){var c=document.getElementById('ld-compats');
-      return {hidden:(!c)?null:!!c.hidden, items:Array.from(document.querySelectorAll('input[data-compat]')).map(function(x){return {slug:x.getAttribute('data-compat'),checked:x.checked};})};})()`);
-    push('F9 Fabric 有「顺便一起装」且 Fabric API 默认勾上',
-      !!(compatInfo && compatInfo.hidden === false && (compatInfo.items||[]).some(function(i){return i.slug==='fabric-api'&&i.checked;})), compatInfo);
     result.nameDefault = nameField && nameField.value;
     try {
       const img = await win.webContents.capturePage();
-      fs.writeFileSync(path.join(ROOT, 'docs', '_dlg-loader-v2.png'), img.toPNG());
-    } catch (e) { /* 截图失败不影响断言 */ }
+      fs.writeFileSync(path.join(ROOT, 'docs', '_dlg-loader-v3.png'), img.toPNG());
+    } catch (e) {
+      /* 截图失败不影响断言 */
+    }
 
-    // ③ 改名 + 选 Fabric → instances:create 要收到玩家填的名字
-    await js(
-      `(function(){var i=document.getElementById('ld-name'); if(!i) return; i.value='我的测试实例'; i.dispatchEvent(new Event('input',{bubbles:true}));})()`
+    // Fabric 的版本下拉 + 兼容前置
+    await waitSel('fabric', 50);
+    const fabSel = await js(
+      `(function(){var s=document.querySelector('[data-selver="fabric"]');
+        return {hidden:s?!!s.hidden:null, count:s?s.options.length:0, first:s&&s.options[0]?s.options[0].value:'',
+                second:s&&s.options[1]?s.options[1].value:''};})()`
     );
-    await js(`(document.querySelector('.modal--loader [data-loader="fabric"]')||{click(){}}).click();`);
-    await sleep(400);
-    await submitLoader();
-    await sleep(2400);
-    push('F5 instances:create 收到自定义名字', !!(rec.create && rec.create.name === '我的测试实例'), rec.create);
-    push('F6 同时带上 mcVersion 与加载器', !!(rec.create && rec.create.mcVersion === '1.20.1' && rec.create.loader && rec.create.loader.type === 'fabric'), rec.create);
+    push('F5 Fabric 有版本下拉，第一项是最新', !!(fabSel && !fabSel.hidden && fabSel.count > 50 && fabSel.first === '0.20.1'), fabSel);
+    const compatInfo = await js(
+      `(function(){var c=document.getElementById('ld-compats');
+        return {hidden:(!c)?null:!!c.hidden, items:Array.from(document.querySelectorAll('input[data-compat]')).map(function(x){return {slug:x.getAttribute('data-compat'),checked:x.checked};})};})()`
+    );
+    push('F6 Fabric 有「前置 API」且 Fabric API 默认勾上',
+      !!(compatInfo && compatInfo.hidden === false && (compatInfo.items || []).some((i) => i.slug === 'fabric-api' && i.checked)),
+      compatInfo);
 
-    // ④ 选已有实例 → 不出现名字输入框，改成一句提示
+    // ---- G：选旧版加载器 → 传给 install:start ----
+    rec.installStart = null;
+    if (fabSel && fabSel.second) {
+      await js(
+        `(function(){var s=document.querySelector('[data-selver="fabric"]'); s.value=${JSON.stringify(fabSel.second)};
+          s.dispatchEvent(new Event('change',{bubbles:true}));})()`
+      );
+      await sleep(300);
+      // 改名 + 提交
+      await js(
+        `(function(){var i=document.getElementById('ld-name'); i.value='我的测试实例'; i.dispatchEvent(new Event('input',{bubbles:true}));})()`
+      );
+      await submitLoader();
+      await sleep(2400);
+      const p1 = rec.installStart;
+      push('G1 instances:create 收到自定义实例名', !!(rec.create && rec.create.name === '我的测试实例'), rec.create);
+      push('G2 install:start 收到玩家挑的旧加载器版本', !!(p1 && p1.loader && p1.loader.type === 'fabric' && p1.loader.version === fabSel.second), {
+        expect: fabSel.second,
+        got: p1 && p1.loader,
+      });
+      push('G3 没勾 OptiFine 时不带 optifineVersion', !!(p1 && p1.optifineVersion === undefined), p1 && p1.optifineVersion);
+    } else {
+      push('G1 instances:create 收到自定义实例名', false, '拿不到版本下拉');
+      push('G2 install:start 收到玩家挑的旧加载器版本', false, '拿不到版本下拉');
+      push('G3 没勾 OptiFine 时不带 optifineVersion', false, '拿不到版本下拉');
+    }
+
+    // ---- H：装到已有实例时改名 → 新建一个 ----
     const someId = await js(
       `(function(){var s=document.getElementById('dl-target');
         var o=Array.from(s.options).find(function(x){return x.value && x.value!=='__new__';});
         return o?o.value:null;})()`
     );
     if (someId) {
-      const f7 = await pickAndInstall(someId);
+      await openFor('1.20.1', someId);
       const existState = await js(
-        `(function(){return {hasName:!!document.getElementById('ld-name'),
-          note:(document.querySelector('.loader-name__note')||{}).textContent||''};})()`
+        `(function(){var i=document.getElementById('ld-name');
+          return {hasName:!!i, value:i?i.value:'',
+                  hint:((document.querySelector('.loader-name__hint')||{}).textContent||'').trim()};})()`
       );
-      push('F7 选已有实例时不显示名字输入框', !existState.hasName && f7.modalInfo.hasLoader, { exist: existState, diag: f7 });
-      push('F8 改显示「将安装到已有实例…」提示', /已有实例/.test(existState.note), existState.note.replace(/\s+/g, ' ').slice(0, 60));
-      await closeModal();
+      push('H1 装到已有实例时名称框仍在，且填的是实例名', !!(existState.hasName && existState.value), existState);
+      push('H2 提示说明「改名就新建实例」', /新建/.test(existState.hint), existState.hint.slice(0, 40));
+      rec.create = null;
+      await js(
+        `(function(){var i=document.getElementById('ld-name'); i.value='另装的一份'; i.dispatchEvent(new Event('input',{bubbles:true}));})()`
+      );
+      await submitLoader();
+      await sleep(2200);
+      push('H3 改名后真的新建了实例', !!(rec.create && rec.create.name === '另装的一份'), rec.create);
+    } else {
+      push('H1 装到已有实例时名称框仍在，且填的是实例名', false, '没有已有实例');
+      push('H2 提示说明「改名就新建实例」', false, '没有已有实例');
+      push('H3 改名后真的新建了实例', false, '没有已有实例');
     }
 
-    /* ============ G. 自定义加载器版本（用户反馈：「都不能自定义选择版本」） ============ */
+    // ---- I：OptiFine 可叠加（用户要求「forge 和高清修复能同时选」） ----
     rec.installStart = null;
-    const g1 = await pickAndInstall('__new__');
-    // ★ 版本查询是异步的：等到 fabric 的下拉真的被灌满再断言（否则拿到的是 0 项）
-    for (let gi = 0; gi < 40; gi++) {
-      const nOpt = await js(`(function(){var s=document.querySelector('[data-selver="fabric"]'); return s?s.options.length:0;})()`);
-      if (nOpt > 50) break;
+    await openFor('1.20.1', '__new__');
+    for (let i = 0; i < 40; i++) {
+      const n = await js(`(function(){var s=document.getElementById('ld-of-ver'); return s?s.options.length:0;})()`);
+      if (n > 0) break;
       await sleep(500);
     }
-    const selInfo = await js(
-      `(function(){
-        var out={};
-        document.querySelectorAll('.modal--loader [data-selver]').forEach(function(s){
-          var t=s.getAttribute('data-selver');
-          out[t]={hidden:!!s.hidden, count:s.options.length, first:s.options[0]?s.options[0].value:'',
-                  second:s.options[1]?s.options[1].value:'', sample:s.options[1]?s.options[1].textContent:''};
-        });
-        return {sels:out, hasVanillaSel:!!document.querySelector('[data-selver="vanilla"]'),
-                hasOptifineSel:!!document.querySelector('[data-selver="optifine"]')};
-      })()`
+    const ofInfo = await js(
+      `(function(){var s=document.getElementById('ld-of-ver'); var b=document.getElementById('ld-of');
+        return {hasBox:!!b, disabled:b?b.disabled:null, count:s?s.options.length:0,
+                first:s&&s.options[0]?s.options[0].value:'',
+                hint:((document.getElementById('ld-of-hint')||{}).textContent||'').trim(),
+                rowHidden:(function(){var r=document.querySelector('[data-loader="optifine"]'); return r?r.classList.contains('loader-item--off'):null;})()};})()`
     );
-    push('G1 Fabric 行有「版本」下拉', !!(selInfo && selInfo.sels.fabric && !selInfo.sels.fabric.hidden && selInfo.sels.fabric.count > 50), selInfo && selInfo.sels.fabric);
-    push('G2 下拉第一项是最新版', !!(selInfo && selInfo.sels.fabric && selInfo.sels.fabric.first === '0.20.1'), selInfo && selInfo.sels.fabric && selInfo.sels.fabric.first);
-    push('G3 原版行没有版本下拉（OptiFine 现在有了，见 H1）', !!(selInfo && !selInfo.hasVanillaSel), selInfo && { v: selInfo.hasVanillaSel, o: selInfo.hasOptifineSel });
+    push('I1 OptiFine 从加载器列表移出、变成勾选项并有版本下拉',
+      !!(ofInfo.hasBox && ofInfo.disabled === false && ofInfo.count > 0 && ofInfo.rowHidden === true), ofInfo);
 
-    // 选一个旧版本（第二个选项）→ install:start 必须收到这个版本，而不是最新
-    const olderVer = selInfo && selInfo.sels.fabric ? selInfo.sels.fabric.second : '';
-    if (olderVer) {
-      await js(
-        `(function(){var s=document.querySelector('[data-selver="fabric"]'); s.value=${JSON.stringify(olderVer)};
-          s.dispatchEvent(new Event('change',{bubbles:true}));})()`
-      );
-      await sleep(400);
-      const badgeTxt = await js(`(document.querySelector('[data-ver="fabric"]')||{}).textContent||''`);
-      push('G4 选旧版后标签变成「已选 x.y.z」', /已选/.test(badgeTxt) && badgeTxt.includes(olderVer), badgeTxt);
-      await js(`(document.querySelector('.modal--loader [data-loader="fabric"]')||{click(){}}).click()`);
-      await sleep(400);
-      await submitLoader();
-      await sleep(2400);
-      const p2 = rec.installStart;
-      push('G5 install:start 收到玩家挑的旧版本', !!(p2 && p2.loader && p2.loader.type === 'fabric' && p2.loader.version === olderVer), {
-        expect: olderVer,
-        got: p2 && p2.loader,
-      });
-    } else {
-      push('G4 选旧版后标签变成「已选 x.y.z」', false, '拿不到第二个版本');
-      push('G5 install:start 收到玩家挑的旧版本', false, '拿不到第二个版本');
-    }
+    // 勾上 OptiFine → 1.20.1 应自动切到 Forge
+    await js(`(function(){var b=document.getElementById('ld-of'); b.checked=true; b.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await sleep(1500);
+    const afterCheck = await js(
+      `(function(){var p=document.querySelector('.modal--loader .loader-item.is-picked');
+        return {picked:p?p.getAttribute('data-loader'):null,
+                ofVersion:(document.getElementById('ld-of-ver')||{}).value||''};})()`
+    );
+    push('I2 1.20.1 勾 OptiFine 自动把加载器切成 Forge', afterCheck.picked === 'forge', afterCheck);
 
-    result.g = selInfo;
+    await waitSel('forge', 1);
+    await submitLoader();
+    await sleep(2600);
+    const pOf = rec.installStart;
+    push('I3 install:start 同时带 forge 与 optifineVersion',
+      !!(pOf && pOf.loader && pOf.loader.type === 'forge' && pOf.optifineVersion !== undefined), pOf);
+    result.ofStart = pOf;
+    await closeModal();
 
-    /* ============ H. OptiFine（高清修复）真的进得来 ============ */
-    const h1 = await pickAndInstall('__new__');
-    const opti = await js(`(function(){
-      var sel=document.querySelector('[data-selver="optifine"]');
-      var row=document.querySelector('[data-loader="optifine"]');
-      return {hasSel:!!sel, hidden:sel?!!sel.hidden:null, count:sel?sel.options.length:0,
-              first:sel&&sel.options[0]?sel.options[0].value:'',
-              ver:((row||{}).querySelector?row.querySelector('.loader-item__ver'):null),
-              verText:row?((row.querySelector('.loader-item__ver')||{}).textContent||''):'',
-              desc:row?((row.querySelector('.loader-item__desc')||{}).textContent||''):''};
-    })()`);
-    push('H1 OptiFine 出现了可选的版本下拉', !!(opti && opti.hasSel && !opti.hidden && opti.count > 0), opti);
-    push('H2 OptiFine 行不再写「手动下载」', !!(opti && !/手动下载/.test(opti.desc) && /自动打补丁|安装器/.test(opti.desc)), opti && opti.desc.slice(0, 80));
-    result.opti = opti;
+    // ---- J：1.12.2 勾 OptiFine 不该被切成 Forge（补丁模式） ----
+    await openFor('1.12.2', '__new__');
+    await waitSel('optifine', 1);
+    const beforeOf = await js(
+      `(function(){var p=document.querySelector('.modal--loader .loader-item.is-picked');
+        return {picked:p?p.getAttribute('data-loader'):null};})()`
+    );
+    await js(`(function(){var b=document.getElementById('ld-of'); b.checked=true; b.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await sleep(1200);
+    const oldOf = await js(
+      `(function(){var p=document.querySelector('.modal--loader .loader-item.is-picked');
+        var s=document.getElementById('ld-of-ver');
+        return {picked:p?p.getAttribute('data-loader'):null, count:s?s.options.length:0,
+                hint:((document.getElementById('ld-of-hint')||{}).textContent||'').trim()};})()`
+    );
+    // 1.12.2 的「推荐加载器」本来就是 Forge，所以这里只断言「勾 OptiFine 没强行改动选择」
+    push('J1 1.12.2 勾 OptiFine 不改变已选加载器（走补丁模式）',
+      !!(oldOf.picked && oldOf.picked === beforeOf.picked && /补丁/.test(oldOf.hint)), { before: beforeOf, after: oldOf });
     await closeModal();
 
     result.ok = result.checks.every((x) => x.pass);
@@ -469,9 +490,9 @@ app.whenReady().then(async () => {
     /* ignore */
   }
 
-  log('RESULT ' + JSON.stringify({ ok: result.ok, checks: result.checks, error: result.error || null }, null, 2));
+  console.log('RESULT ' + JSON.stringify({ ok: result.ok, checks: result.checks, error: result.error || null }, null, 2));
   app.exit(0);
 }).catch((e) => {
-  log('FATAL ' + ((e && e.stack) || e));
+  console.log('FATAL ' + ((e && e.stack) || e));
   app.exit(1);
 });

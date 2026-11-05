@@ -1178,7 +1178,10 @@ export const downloadPage = {
             type: 'optifine',
             label: 'OptiFine',
             badge: '光影优化',
-            desc: '经典光影/优化。启动器会下载官方安装器并自动打补丁；1.13 及以后需要先装 Forge（OptiFine 变成 Forge 模组）。',
+            desc: '高清修复。现在改成「附加项」—— 在下面「另外一起装」里勾选，可以和 Forge 一起装。',
+            /* ★ 不再作为互斥加载器出现在列表里，但保留这条 OPTIONS：
+               它负责触发 loader:versions 的 optifine 查询，结果给下面那个勾选框用。 */
+            hiddenRow: true,
           },
         ];
 
@@ -1200,7 +1203,7 @@ export const downloadPage = {
             </div>
             <div class="loader-list">
               ${OPTIONS.map(
-                (o) => `<div class="loader-item ${o.opt ? 'loader-item--off' : ''}" role="button" tabindex="0" data-loader="${o.type}">
+                (o) => `<div class="loader-item ${o.opt || o.hiddenRow ? 'loader-item--off' : ''}" role="button" tabindex="0" data-loader="${o.type}">
                   <span class="loader-item__main">
                     <span class="loader-item__title">
                       ${escapeHtml(o.label)}
@@ -1226,30 +1229,37 @@ export const downloadPage = {
                 </div>`
               ).join('')}
             </div>
-            <!-- ★ 兼容前置：选好加载器后出现（Fabric API / Sodium 这类，多数模组没它直接崩） -->
-            <div class="loader-compats" id="ld-compats" hidden>
-              <div class="loader-compats__title">顺便一起装（可选）</div>
-              <div class="loader-compats__list" id="ld-compats-list"></div>
-              <div class="loader-compats__hint">
-                这些是加载器的「前置 API」，大多数模组没有它会直接崩；默认勾上的建议留着。
+            <!-- ★ 另外一起装：OptiFine（可叠加）+ 加载器前置 API -->
+            <div class="loader-extras" id="ld-extras">
+              <div class="loader-extras__title">另外一起装（可选）</div>
+              <div class="loader-of">
+                <label class="loader-of__check">
+                  <input type="checkbox" id="ld-of" />
+                  <span>OptiFine（高清修复）</span>
+                </label>
+                <select class="select loader-of__ver" id="ld-of-ver" disabled></select>
+                <span class="loader-of__hint" id="ld-of-hint">查询 OptiFine 版本中…</span>
+              </div>
+              <div class="loader-compats" id="ld-compats" hidden>
+                <div class="loader-compats__list" id="ld-compats-list"></div>
+                <div class="loader-compats__hint">
+                  这些是加载器的「前置 API」，大多数模组没有它会直接崩；默认勾上的建议留着。
+                </div>
               </div>
             </div>
             <div class="loader-hint">
               ★ 加载器版本默认挑最新稳定版；想用旧版（比如整合包指定的那个）就在右边的下拉里自己选。
             </div>
-            ${
-              allowName
-                ? `<div class="loader-name">
-                    <span class="loader-name__label">实例名称</span>
-                    <input class="input" id="ld-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"
-                           value="${escapeHtml(defaultName)}" placeholder="给这个实例起个名字" />
-                    <span class="loader-name__hint">同名会自动加编号；装完也能在「版本设置」里改</span>
-                  </div>`
-                : `<div class="loader-name__note">
-                    将安装到已有实例${targetName ? `「${escapeHtml(targetName)}」` : ''} ——
-                    想另外装一份同版本的，先在上面「安装到」里选「＋ 新建实例…」。
-                  </div>`
-            }
+            <div class="loader-name">
+              <span class="loader-name__label">实例名称</span>
+              <input class="input" id="ld-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"
+                     value="${escapeHtml(defaultName)}" placeholder="给这个实例起个名字" />
+              <span class="loader-name__hint">${
+                allowName
+                  ? '同名会自动加编号；装完也能在「版本设置」里改'
+                  : `当前装到已有实例「${escapeHtml(targetName || '')}」；改个名字就会新建一个实例`
+              }</span>
+            </div>
           </div>
           <div class="modal__foot">
             <button class="btn btn--ghost" data-act="cancel" type="button">取消</button>
@@ -1383,7 +1393,9 @@ export const downloadPage = {
                   ? { latest: null, total: 0, label: slot.label || 'ModLoader' }
                   : null;
               } else {
-                verMap[type] = arr.length ? { latest: slot.latest || arr[0], total: arr.length } : null;
+                verMap[type] = arr.length
+                  ? { latest: slot.latest || arr[0], total: arr.length, versions: arr }
+                  : null;
               }
               /**
                * ★ 玩家反馈：「这些模组加载器都不能自定义选择版本」。
@@ -1424,6 +1436,8 @@ export const downloadPage = {
               }
               paintVer(type);
               applyRec();
+              // OptiFine 的版本喂给「另外一起装」里那个下拉
+              if (type === 'optifine') fillOptifinePicker();
             });
           verWait[type] = p;
           return p;
@@ -1438,7 +1452,57 @@ export const downloadPage = {
         /** 当前选中的加载器（点行 = 选中，底部「开始安装」才提交） */
         let picked = null;
 
-        /** 按选中的加载器渲染「顺便一起装」的前置 API 勾选 */
+        /** OptiFine 是不是「1.13+ 需要 Forge」那档 */
+        const isModernForOptiFine = () => {
+          const t = mcTupleOf(versionId);
+          if (!t) return !ANCIENT_VERSION_RE.test(String(versionId || ''));
+          return t[0] > 1 || (t[0] === 1 && t[1] >= 13);
+        };
+
+        /** 把 loader:versions 拿到的 OptiFine 版本灌进「另外一起装」下拉 */
+        const fillOptifinePicker = () => {
+          const sel = modal.querySelector('#ld-of-ver');
+          const hint = modal.querySelector('#ld-of-hint');
+          const box = modal.querySelector('#ld-of');
+          const info = verMap.optifine;
+          const list = (info && Array.isArray(info.versions) && info.versions) || [];
+          if (!sel || !box) return;
+          if (!list.length) {
+            sel.innerHTML = '';
+            sel.disabled = true;
+            box.disabled = true;
+            if (hint) hint.textContent = `这个版本没有 OptiFine（${versionId}）`;
+            return;
+          }
+          sel.innerHTML = list
+            .map((v, i) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}${i === 0 ? '（最新）' : ''}</option>`)
+            .join('');
+          sel.disabled = false;
+          box.disabled = false;
+          if (hint) {
+            hint.textContent = isModernForOptiFine()
+              ? '这个版本要装在 Forge 上，勾选后会自动把加载器切成 Forge'
+              : '这个版本用官方补丁模式装，可以单独装也可以配 ModLoader';
+          }
+        };
+
+        /** 勾了 OptiFine 且 1.13+ 却不是 Forge → 自动切 Forge（用户明确要求两者能同时选） */
+        let autoSwitching = false;
+        const enforceOptiFineLoader = () => {
+          const box = modal.querySelector('#ld-of');
+          if (!box || !box.checked) return;
+          if (autoSwitching) return;
+          if (!isModernForOptiFine()) return;
+          if (picked === 'forge' || picked === 'neoforge') return;
+          const forgeRow = modal.querySelector('[data-loader="forge"]');
+          if (!forgeRow) return;
+          autoSwitching = true;
+          forgeRow.click();
+          autoSwitching = false;
+          toast('1.13 及以后的 OptiFine 需要 Forge，已自动把加载器切成 Forge', 'info', 5000);
+        };
+
+        /** 按选中的加载器渲染「前置 API」勾选 */
         const renderCompats = (type) => {
           const wrap = modal.querySelector('#ld-compats');
           const list = modal.querySelector('#ld-compats-list');
@@ -1498,6 +1562,8 @@ export const downloadPage = {
             }
             // 兼容前置列表
             renderCompats(type);
+            // 勾了 OptiFine 但选了不兼容的加载器 → 自动切 Forge
+            enforceOptiFineLoader();
 
             // 版本还没查完就等一会儿（只影响提示，不影响提交）
             if (verWait[type]) {
@@ -1513,7 +1579,7 @@ export const downloadPage = {
           });
         });
 
-        /** 底部「开始安装」：把选中的加载器 / 版本 / 名字 / 兼容前置一起交出去 */
+        /** 底部「开始安装」：把选中的加载器 / 版本 / 名字 / OptiFine / 兼容前置一起交出去 */
         const submit = () => {
           const type = picked || 'vanilla';
           let ver;
@@ -1526,13 +1592,24 @@ export const downloadPage = {
           const companions = Array.from(modal.querySelectorAll('input[data-compat]:checked')).map((x) =>
             x.getAttribute('data-compat')
           );
+          // ★ OptiFine 现在是可叠加项：勾了就带上版本（空串 = 最新正式版），没勾就是 undefined
+          const ofBox = modal.querySelector('#ld-of');
+          let optifineVersion;
+          if (ofBox && ofBox.checked) {
+            const ofSel = modal.querySelector('#ld-of-ver');
+            optifineVersion = ofSel && ofSel.value ? String(ofSel.value) : '';
+          }
           finish({
             type,
             version: ver,
             companions,
-            name: allowName ? String(nameInput ? nameInput.value : defaultName).trim() || defaultName : undefined,
+            optifineVersion,
+            name: String(nameInput ? nameInput.value : defaultName).trim() || defaultName,
           });
         };
+
+        const ofBox = modal.querySelector('#ld-of');
+        if (ofBox) ofBox.addEventListener('change', () => enforceOptiFineLoader());
 
         const goBtn = modal.querySelector('#ld-go');
         if (goBtn) goBtn.addEventListener('click', submit);
@@ -1645,10 +1722,17 @@ export const downloadPage = {
 
       const chosen = await pickLoaderFor(versionId, {
         allowName: wantNew,
-        defaultName: wantNew ? suggestInstanceName(instanceNameFor(versionId, '')) : '',
+        defaultName: wantNew ? suggestInstanceName(instanceNameFor(versionId, '')) : existingName,
         targetName: wantNew ? '' : existingName,
       });
       if (!chosen) return; // 玩家取消
+
+      /**
+       * ★ 名字也可能是在「装到已有实例」时被玩家改过的 —— 改了就当新建一个实例
+       *   （用户要求：名字要能在安装里自己改，想装几份同版本就装几份）。
+       */
+      const renamedExisting = !wantNew && !!chosen.name && chosen.name !== existingName;
+      const willCreate = wantNew || renamedExisting;
 
       // 玩家在弹窗里看到的加载器版本号，原样交给后端（没查到就不传，后端自己挑最新）
       const loaderObj =
@@ -1656,7 +1740,7 @@ export const downloadPage = {
           ? { type: chosen.type, ...(chosen.version ? { version: chosen.version } : {}) }
           : null;
 
-      let targetId = wantNew ? '' : existingId;
+      let targetId = willCreate ? '' : existingId;
       let targetName = '';
       if (!targetId) {
         // 新建实例：名字用玩家在弹窗里填的（没填就退回自动建议的、已去重的那个）
@@ -1685,6 +1769,8 @@ export const downloadPage = {
       // ★ loader 必须是对象 { type, version }：主进程 install.js 读 loader.version
       const payload = { id: targetId, mcVersion: versionId };
       if (loaderObj) payload.loader = loaderObj;
+      // ★ OptiFine 是可叠加项：勾了就带上版本（空串 = 最新正式版）
+      if (chosen.optifineVersion !== undefined) payload.optifineVersion = chosen.optifineVersion;
 
       const r = await call('install:start', payload);
       if (!r.ok && (!r.data || !r.data.taskId)) {

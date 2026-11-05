@@ -32,8 +32,25 @@ function normalizeLoader(loader) {
   if (!loader || typeof loader !== 'object') return null;
   const type = String(loader.type || 'vanilla').toLowerCase();
   if (!LOADER_TYPES.includes(type)) return null;
-  if (type === 'vanilla') return { type: 'vanilla', version: String(loader.version || '') };
-  return { type, version: String(loader.version || '') };
+  const base = { type, version: String(loader.version || '') };
+  if (type === 'vanilla') return base;
+  /**
+   * ★ 2026-11-05：保留加载器的**附加字段**，不要只留 type/version。
+   *
+   * 起因：OptiFine 从「互斥加载器」改成「可叠加项」后，Forge + OptiFine 的实例
+   * 要记 `loader = { type:'forge', version:'47.4.28', optifine:'HD_U_I6' }`。
+   * 以前这里只返回 {type, version}，会把 optifine 子字段悄悄丢掉 ——
+   * 写进 instance.json 后一读就没了（实测：installedVersion 对、optifine 消失）。
+   * ⇒ 这里把**基本类型**的附加字段原样带上（对象/函数不复制，避免不可序列化）。
+   */
+  for (const [key, value] of Object.entries(loader)) {
+    if (key === 'type' || key === 'version') continue;
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      base[key] = value;
+    }
+  }
+  return base;
 }
 
 function readIndex(home) {

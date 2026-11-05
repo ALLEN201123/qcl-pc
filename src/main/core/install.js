@@ -336,18 +336,31 @@ function buildInstancePatch(params) {
   const optsLoader = p.optsLoader || null;
   const patchMode = !!(optifineResult && optifineResult.mode === 'patch');
   const modMode = !!(optifineResult && optifineResult.mode === 'mod');
+  const installedLoaderVersion = p.installedLoaderVersion ? String(p.installedLoaderVersion) : '';
+  const forgeVersion = String(p.forgeVersion || (optsLoader && optsLoader.version) || '');
 
   let loader;
   if (loaderType === 'modloader') {
     loader = { type: 'modloader', version: mcVersion };
   } else if (patchMode) {
     loader = { type: 'optifine', version: String(optifineResult.version || '') };
+  } else if (modMode && loaderType === 'forge') {
+    /**
+     * ★★ 新契约：Forge + OptiFine 叠加。
+     *   `loader` 保留 type:'forge' / version（原有字段不动），新增 `optifine` 子字段。
+     *   注意这里**不再**用 instance.loader（刚装完 Forge 时 instance.json 还是旧的）。
+     */
+    loader = {
+      type: 'forge',
+      version: forgeVersion || installedLoaderVersion || String((instance.loader && instance.loader.version) || ''),
+      optifine: String(optifineResult.version || ''),
+    };
   } else if (modMode) {
-    // 模式 B：必须已经装了 Forge，loader 保持 forge（版本用实例里记的）
+    // 旧路径 loader=optifine（1.13+）：loader 保持 forge，版本用实例里记的
     const current = instance.loader || null;
     loader = current && current.type === 'forge'
-      ? { type: 'forge', version: String(current.version || '') }
-      : { type: 'forge', version: '' };
+      ? { type: 'forge', version: String(current.version || ''), optifine: String(optifineResult.version || '') }
+      : { type: 'forge', version: '', optifine: String(optifineResult.version || '') };
   } else if (optsLoader && optsLoader.type && optsLoader.type !== 'vanilla') {
     loader = { type: optsLoader.type, version: optsLoader.version || '' };
   } else if (p.loaderProfile) {
@@ -357,8 +370,15 @@ function buildInstancePatch(params) {
   }
 
   let installedVersion;
-  if (modMode) {
-    // ★ 保留原来的 installedVersion（Forge / 已装版本），绝不覆盖成 mcVersion
+  if (modMode && loaderType === 'forge') {
+    /**
+     * ★★★ Forge + OptiFine：installedVersion 必须是 **Forge 的版本 id**
+     *   （`<mc>-forge-<ver>`），否则启动会退回原版、OptiFine 也不生效。
+     *   Forge 刚装好时 instance.json 里还没有这个 id，所以用 installedLoaderVersion。
+     */
+    installedVersion = installedLoaderVersion || instance.installedVersion || targetId;
+  } else if (modMode) {
+    // 旧路径：保留原来的 installedVersion（Forge / 已装版本），绝不覆盖成 mcVersion
     installedVersion = instance.installedVersion || targetId;
   } else if (patchMode) {
     installedVersion = optifineResult.versionId;
@@ -375,9 +395,16 @@ function buildInstancePatch(params) {
     chinesePack: p.chinesePackInfo || undefined,
   };
   if (modMode) {
-    const line = `OptiFine ${optifineResult.version} 已放入 mods/（1.13+ 需要 Forge 启动）`;
+    const line = loaderType === 'forge'
+      ? `已叠加 OptiFine ${optifineResult.version}（mods/，Forge 启动时自动加载）`
+      : `OptiFine ${optifineResult.version} 已放入 mods/（1.13+ 需要 Forge 启动）`;
     const currentNotes = String(instance.notes || '').trim();
-    patch.notes = currentNotes ? `${currentNotes}\n${line}` : line;
+    // 幂等：重复安装同一个 OptiFine 版本时不要一直往 notes 里追加
+    if (!currentNotes.includes(line)) {
+      patch.notes = currentNotes ? `${currentNotes}\n${line}` : line;
+    } else {
+      patch.notes = currentNotes;
+    }
   }
   return patch;
 }
@@ -480,9 +507,19 @@ function createTracker(onProgress) {
 
 /**
  * 安装一个版本到一个实例。
- * @param {{home:string, instanceId:string, mcVersion:string, loader?:object, source?:string,
- *          threads?:number, onProgress?:Function, onLog?:Function, signal?:AbortSignal, timeoutMs?:number,
- *          reinstall?:boolean}} params
+ *
+ * ★ 2026-11-05 起 OptiFine 不再和加载器互斥：`optifineVersion` 是**可叠加**的附加项。
+ *   · `undefined`（或没有这个字段）→ 不装 OptiFine（Forge 单独装的行为完全不变）
+ *   · `''`（空串）             → 装 OptiFine，版本用最新正式版
+ *   · `'HD_U_I6'`             → 装指定版本的 OptiFine
+ *   三种组合：
+ *     ① loader=forge + optifineVersion（1.13+ 的标准姿势）→ Forge 装完后把 OptiFine 放进 mods/
+ *     ② loader=vanilla/null + optifineVersion（≤1.12.2）→ 跑 Patcher 生成带 tweakClass 的版本
+ *     ③ loader=optifine（旧路径，保留兼容）
+ *
+ * @param {{home:string, instanceId:string, mcVersion:string, loader?:object, optifineVersion?:string,
+ *          source?:string, threads?:number, onProgress?:Function, onLog?:Function,
+ *          signal?:AbortSignal, timeoutMs?:number, settings?:object, reinstall?:boolean}} params
  * @returns {Promise<{version:string, files:number, bytes:number, gameDir:string, instance:object, mainClass:string, logFile:string}>}
  */
 async function install(params) {
@@ -498,6 +535,39 @@ async function install(params) {
   const signal = opts.signal;
   /** 本次要装的加载器类型（提前取出来：依赖库解析与下载源都要用） */
   const requestedLoaderType = opts.loader && opts.loader.type ? String(opts.loader.type).toLowerCase() : '';
+
+  /**
+   * ★★★ OptiFine 是「可叠加的附加项」，不再是互斥加载器（2026-11-05 用户反馈
+   *   「forge 和高清修复不能同时选择」）。
+   *
+   *   判定必须用 `!== undefined`：**空串表示「装，用最新正式版」**，undefined 才表示不装。
+   *   （渲染层会传 `optifineVersion: ''` 表示勾选了但没指定版本。）
+   *
+   *   这里先做一次「不可能的组合」的快速失败，避免白装几百 MB 的原版文件：
+   *   1.13+ 的 OptiFine 必须是 Forge 模组（fabric/quilt/neoforge 都不行）。
+   */
+  const wantsOptifine = opts.optifineVersion !== undefined;
+  const requestedOptifineVersion = wantsOptifine ? String(opts.optifineVersion || '') : '';
+  /** log 还没建好，先攒着（见下面 createLogger 之后的 flush） */
+  const pendingLogs = [];
+  let optifineMode = null;
+  if (wantsOptifine && requestedLoaderType !== 'optifine') {
+    // eslint-disable-next-line global-require
+    const optifineModule = require('./optifine');
+    optifineMode = optifineModule.modeFor(mcVersion); // 'patch'（≤1.12.2）/ 'mod'（≥1.13）
+    if (optifineMode === 'mod' && requestedLoaderType !== 'forge') {
+      throw new http.LauncherError('1.13 以后的 OptiFine 需要 Forge：请把加载器换成 Forge 再一起装。', {
+        code: 'E_OPTIFINE_NEED_FORGE',
+      });
+    }
+  }
+  if (wantsOptifine) {
+    pendingLogs.push(
+      `已勾选 OptiFine${requestedOptifineVersion ? ` ${requestedOptifineVersion}` : '（最新正式版）'}，安装方式：${
+        optifineMode === 'mod' ? '放进 mods（需要 Forge）' : 'Patcher 打补丁'
+      }`
+    );
+  }
 
   paths.ensureHomeLayout(home);
   const instance = await instancesModule.ensure(home, instanceId);
@@ -516,6 +586,8 @@ async function install(params) {
   const ctx = { home, gameDir, versionsDir, librariesDir, assetsDir, nativesDir, source, threads, timeoutMs, signal, log };
 
   log.log(`开始安装：实例 ${instance.name}（${instanceId}），游戏版本 ${mcVersion}，下载源 ${source === 'bmclapi' ? 'BMCLAPI 镜像' : '官方源'}`);
+  // 把「还没建 logger 之前攒下的日志」补打出来（目前只有 OptiFine 勾选那一行）
+  for (const line of pendingLogs) log.log(line);
   tracker.beginPhase('prepare', '准备安装', 0, 0);
 
   const checkAborted = () => {
@@ -1061,17 +1133,28 @@ async function install(params) {
   /**
    * ── ⑤.8 OptiFine（高清修复）──
    *
-   * ★ 两种装法（照 HMCL OptiFineInstallTask，见 core/optifine.js）：
-   *   · MC ≤ 1.12.2：用安装器自带的 Patcher 无界面打补丁 → 生成 inheritsFrom 原版的版本 JSON；
-   *   · MC ≥ 1.13：OptiFine 是 Forge 模组，直接放进 mods/（**必须先有 Forge**，否则报中文错误）。
+   * ★ 两条入口：
+   *   · 旧路径 `loader=optifine`（界面会去掉这一项，但保留兼容）：按 MC 版本自动决定 patch/mod；
+   *   · 新路径 **可叠加**：`loader=forge + optifineVersion`（≥1.13 标准姿势）或
+   *     `loader=vanilla/null + optifineVersion`（≤1.12.2 原版 + OptiFine）。
    *
-   * 排在原版安装、中文补丁、ModLoader 之后（Patcher 需要真实的原版 jar）。
-   * 失败要如实报错（原版已装好、仍可启动），绝不假装装好了。
+   * 两种装法（见 core/optifine.js）：
+   *   · ≤1.12.2：安装器自带 Patcher，无界面打补丁 → 生成 inheritsFrom 原版的版本 JSON；
+   *   · ≥1.13：OptiFine 是 Forge 模组，直接放进 mods/。
+   * ★ ≤1.12.2 但加载器是 Forge 时也放进 mods/：Forge 已经在用 launchwrapper，
+   *   再跑 Patcher 会多套一层 tweakClass，两边打架。
+   *
+   * 排在原版安装、Forge 安装器、中文补丁、ModLoader 之后（Patcher 需要真实原版 jar）。
+   * 失败要如实报错（原版/Forge 已装好、仍可启动），绝不假装装好了。
    */
-  if (loaderType === 'optifine') {
+  if (loaderType === 'optifine' || wantsOptifine) {
     tracker.beginPhase('optifine', '安装 OptiFine', 1, 0);
     try {
-      const optifine = require('./optifine');
+      const optifineMod = require('./optifine');
+      // 旧路径用 loader.version；叠加路径用 optifineVersion（空串 = 最新正式版）
+      const ofVersion = loaderType === 'optifine'
+        ? ((opts.loader && opts.loader.version) || '')
+        : requestedOptifineVersion;
       // 设置里指定了 Java 就优先用它（Patcher 要跑 java）
       let javaForOptifine = null;
       try {
@@ -1080,12 +1163,35 @@ async function install(params) {
       } catch (_) {
         javaForOptifine = null;
       }
-      optifineResult = await optifine.install({
+
+      /** 叠加模式下要显式覆盖的安装方式 + 给 optifine.install 看的「实例视角」 */
+      let modeOverride = null;
+      let effectiveInstance = instance;
+      if (loaderType !== 'optifine') {
+        const forgeVersion = String((opts.loader && opts.loader.version) || installedLoaderVersion || '');
+        if (optifineMode === 'mod' || loaderType === 'forge') {
+          // ≥1.13 必须 Forge；≤1.12.2 + Forge 也走 mods/。两种情况都要求 Forge 真的装成功了
+          if (!installedLoaderVersion) {
+            throw new http.LauncherError(
+              'Forge 没有安装成功，无法安装 OptiFine。请先解决 Forge 安装失败的问题（原因见上面的日志）。',
+              { code: 'E_OPTIFINE_NO_FORGE' }
+            );
+          }
+          modeOverride = 'mod';
+          // ⑤.6 的 Forge 元数据要到 ⑥ 才写进 instance.json，这里先造一个「已装 Forge」的视角
+          effectiveInstance = { ...instance, loader: { type: 'forge', version: forgeVersion } };
+        } else {
+          modeOverride = 'patch'; // ≤1.12.2 原版 + OptiFine
+        }
+      }
+
+      optifineResult = await optifineMod.install({
         home,
         instanceId,
         mcVersion,
-        version: (opts.loader && opts.loader.version) || '',
-        instance,
+        version: ofVersion,
+        mode: modeOverride || undefined,
+        instance: effectiveInstance,
         javaPath: javaForOptifine,
         signal,
         onLog: (line) => log.log(line),
@@ -1095,9 +1201,19 @@ async function install(params) {
         },
       });
       tracker.endPhase(1);
-      installedLoaderVersion = optifineResult.version;
+      /**
+       * ★ 只有 patch 模式 / 旧路径才把 installedLoaderVersion 换成 OptiFine 版本；
+       *   forge 叠加模式**必须保留 Forge 的版本 id**（installedVersion 不能被 OptiFine 冲掉）。
+       */
+      if (optifineResult.mode === 'patch' || loaderType === 'optifine') {
+        installedLoaderVersion = optifineResult.version;
+      }
       if (optifineResult.mode === 'patch') {
         log.log(`OptiFine 已安装（补丁模式）：版本 ${optifineResult.versionId}，补丁 jar ${optifineResult.optifineJar}`);
+      } else if (loaderType === 'forge') {
+        log.log(
+          `OptiFine 已放入 mods：${optifineResult.file}（Forge ${String((opts.loader && opts.loader.version) || installedLoaderVersion || '')} 启动时自动加载）`
+        );
       } else {
         log.log(`OptiFine 已放入 mods：${optifineResult.file}（1.13+ 需要 Forge 启动）`);
       }
@@ -1105,9 +1221,13 @@ async function install(params) {
       tracker.endPhase(1);
       const msg = err && err.message ? err.message : String(err);
       log.log(`OptiFine 安装失败：${msg}`);
+      // Forge 叠加场景要说清「Forge 已装好」，不能只写「原版已装好」
+      const base = loaderType === 'forge' && installedLoaderVersion
+        ? `原版 ${mcVersion} + Forge ${installedLoaderVersion} 已装好`
+        : `原版 ${mcVersion} 已装好`;
       throw new http.LauncherError(
-        `原版 ${mcVersion} 已装好，但 OptiFine 安装失败：${msg}。` +
-          `你可以先在「版本列表」里启动原版，或稍后重试。`,
+        `${base}，但 OptiFine 安装失败：${msg}。` +
+          `你可以先在「版本列表」里启动原版${loaderType === 'forge' ? '/Forge' : ''}，或稍后重试。`,
         { code: 'E_LOADER' }
       );
     }
@@ -1153,6 +1273,9 @@ async function install(params) {
     loaderInfo,
     optsLoader: opts.loader,
     chinesePackInfo,
+    // ★ Forge + OptiFine 叠加时，installedVersion 要用刚装出来的 Forge 版本 id
+    installedLoaderVersion,
+    forgeVersion: String((opts.loader && opts.loader.version) || installedLoaderVersion || ''),
   });
   const updated = await instancesModule.update(home, instanceId, instancePatch);
   tracker.endPhase(1);
@@ -1177,6 +1300,10 @@ async function install(params) {
     installedLoaderVersion,
     modloaderInjected,
     loaderManualHint,
+    // OptiFine 可叠加项的安装结果（null = 没勾选 / 没执行）
+    optifine: optifineResult
+      ? { mode: optifineResult.mode, version: optifineResult.version, versionId: optifineResult.versionId || null, file: optifineResult.file || null }
+      : null,
   };
 }
 

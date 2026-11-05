@@ -5,7 +5,7 @@
  * 写入：`instances:update { id, patch }`（实例级）/ `settings:set`（全局启动参数）。
  */
 
-import { call } from '../bridge.js';
+import { call, on } from '../bridge.js';
 import { state, loadInstances, loadJava, saveSettings, notify } from '../store.js';
 import { html, raw, setHTML, toast, fmtDate, fmtDuration, fmtRelative, fmtBytes, loaderLabel, openModal } from '../ui.js';
 import { icon } from '../icons.js';
@@ -20,6 +20,84 @@ const TABS = [
   { id: 'advanced', label: '高级' },
   { id: 'folder', label: '目录与文件' },
 ];
+
+/**
+ * 加载器中文名。
+ * ★ 不能直接用 ui.js 的 `loaderLabel()` 兜底：它的 LOADER_NAME 里没有 modloader / babric，
+ *   会原样显示英文 `modloader`（界面铁律是一个英文单词都不许漏出来）。
+ */
+const LOADER_TEXT = {
+  vanilla: '原版',
+  fabric: 'Fabric',
+  forge: 'Forge',
+  neoforge: 'NeoForge',
+  quilt: 'Quilt',
+  modloader: 'ModLoader',
+  babric: 'Babric',
+  optifine: 'OptiFine',
+  liteloader: 'LiteLoader',
+};
+
+/**
+ * 当前实例的加载器信息（「模组加载器」卡片 & 补装弹窗默认值都用它）。
+ * `inst.loader` 形如 `{ type:'fabric', version:'0.20.1' }`；
+ * OptiFine 可能挂在 `loader.optifine`，也可能是实例顶层的 `optifine`，两种都认。
+ */
+function currentLoaderInfo(inst) {
+  const l = (inst && inst.loader) || null;
+  const type = l && l.type ? String(l.type) : 'vanilla';
+  const version = l && l.version ? String(l.version) : '';
+  const optifine = (l && l.optifine) || (inst && inst.optifine) || '';
+  const isVanilla = !type || type === 'vanilla';
+  const base = isVanilla ? '原版（没有模组加载器）' : `${LOADER_TEXT[type] || type}${version ? ` ${version}` : ''}`;
+  return {
+    type: isVanilla ? 'vanilla' : type,
+    version,
+    optifine: optifine ? String(optifine) : '',
+    base,
+    label: optifine ? `${base} + OptiFine ${optifine}` : base,
+  };
+}
+
+/** 远古版本 id（ModLoader 时代：pre-classic / classic / indev / infdev / alpha / beta） */
+const ANCIENT_VERSION_RE = /^(rd-|pc-|c0\.|in[-d]|inf|a\d+\.\d|b\d+\.\d|pre-?classic|classic|indev|infdev|alpha|beta)/i;
+
+/** 解析主版本号：'1.12.2' → [1,12,2]；快照 / 远古 id → null */
+function mcTupleOf(id) {
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(id || ''));
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3] || 0)];
+}
+
+/** 1.13 及以后的 OptiFine 必须装在 Forge 上（用户明确要求两者能同时选） */
+function optiFineNeedsForge(mcVersion) {
+  const t = mcTupleOf(mcVersion);
+  if (!t) return !ANCIENT_VERSION_RE.test(String(mcVersion || ''));
+  return t[0] > 1 || (t[0] === 1 && t[1] >= 13);
+}
+
+/**
+ * 推荐加载器（与 download.js 同一套规则，PC 版两处行为必须一致）：
+ *   远古 → ModLoader（b1.7.3 也可 Babric） / 1.0~1.13.2 → Forge / 1.14+ → Fabric
+ */
+function pickRecommendedLoader(mcVersion) {
+  const s = String(mcVersion || '');
+  if (ANCIENT_VERSION_RE.test(s)) {
+    if (/^b1\.7\.3/i.test(s)) return { type: 'babric', why: 'b1.7.3 推荐 Babric（Fabric 分支）；想装老 mod 就选 ModLoader' };
+    return { type: 'modloader', why: '远古版本没有 Fabric/Forge，只能装 ModLoader（或 Babric）' };
+  }
+  const t = mcTupleOf(s);
+  if (t && (t[0] < 1 || (t[0] === 1 && t[1] < 14))) return { type: 'forge', why: '1.14 之前 Fabric 支持不全，推荐 Forge' };
+  return { type: 'fabric', why: '1.14 起 Fabric 生态最全、启动最快' };
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 /**
  * 可选的实例图标（照安卓版 res/drawable/ic_mm_*.png 移植的 24 个 MultiMC 风格图标）。
@@ -530,9 +608,29 @@ export const versionSettingPage = {
     /* ------------------------------ 概览 ------------------------------ */
 
     function drawOverview() {
+      // ★ 用「最新」的实例对象：装完加载器后 state.instances 会被整体替换，闭包里的 inst 会过期
+      const cur = state.instances.find((x) => x.id === inst.id) || inst;
+      const ldr = currentLoaderInfo(cur);
       setHTML(
         pane,
         html`<div class="card">
+            <div class="card__title">模组加载器</div>
+            <div class="loader-current">
+              <span class="loader-current__label">当前</span>
+              <span class="loader-current__value" id="vs-loader-value">${ldr.label}</span>
+              ${ldr.type === 'vanilla' ? html`<span class="badge">原版</span>` : html`<span class="badge badge--accent">${LOADER_TEXT[ldr.type] || ldr.type}</span>`}
+              ${ldr.optifine ? html`<span class="badge badge--ok">OptiFine ${ldr.optifine}</span>` : raw('')}
+            </div>
+            <div class="sourcetip" style="margin-top:9px">
+              游戏版本 <strong>${cur.mcVersion || cur.installedVersion || '未知'}</strong> 已经装好了。
+              这里可以<strong>只补装一个加载器（或 OptiFine）</strong>，不会重新下载游戏本体。
+            </div>
+            <div class="hstack" style="margin-top:10px">
+              <button class="btn" id="vs-loader-open" type="button">${raw(icon('bolt', 14))}安装 / 更换加载器</button>
+              <span class="page__sub">想玩模组就先装 Fabric / Forge</span>
+            </div>
+          </div>
+          <div class="card">
             <div class="card__title">实例信息</div>
             <div class="kv">
               <div class="kv__k">名称</div>
@@ -540,7 +638,7 @@ export const versionSettingPage = {
               <div class="kv__k">游戏版本</div>
               <div class="kv__v">${inst.mcVersion}</div>
               <div class="kv__k">加载器</div>
-              <div class="kv__v">${loaderLabel(inst.loader)}</div>
+              <div class="kv__v">${ldr.type === 'vanilla' ? '原版' : ldr.label}</div>
               <div class="kv__k">实例 ID</div>
               <div class="kv__v mono">${inst.id}</div>
               <div class="kv__k">创建时间</div>
@@ -598,6 +696,14 @@ export const versionSettingPage = {
         toast('已保存', 'ok');
         draw();
       });
+
+      /* ---------------- 自动安装加载器（照 HMCL AutoInstallPage） ---------------- */
+      const loaderBtn = pane.querySelector('#vs-loader-open');
+      if (loaderBtn) {
+        loaderBtn.addEventListener('click', () => {
+          openAutoInstall(cur, () => draw());
+        });
+      }
 
       /* ---------------- 导出整合包（照 HMCL 的 modpack 导出） ---------------- */
       const exportBtn = pane.querySelector('#vs-export');
@@ -916,6 +1022,562 @@ export const versionSettingPage = {
         const r = await call('shell:openPath', { path: p });
         if (!r.ok) toast(r.error || '打开失败', 'error', 5000);
       });
+    }
+
+    /* ------------------------------------------------------------------
+     * 自动安装 / 更换加载器（照 HMCL 的 AutoInstallPage）
+     *
+     * 用户原话：「游戏版本设置里面，你也没有加那个自动安装，让玩家安装过的游戏版本
+     *           如果是原版，玩家可以去里面（版本设置）加加载器」
+     *
+     * 所以这里做的是「**已装好的实例，只补装加载器**」：
+     *   · 不新建实例、不改名字、不重新下载游戏本体
+     *   · 加载器版本从 `loader:versions` 查，默认最新，允许自己挑旧版
+     *   · OptiFine 是可叠加项：1.13+ 必须配 Forge（勾了就自动切 Forge，照 download.js 那套）
+     *   · 提交 `install:start({ id, mcVersion, loader, optifineVersion? })`，
+     *     ★ 没勾 OptiFine 时**不带** optifineVersion 字段（后端用 `!== undefined` 判定）
+     *   · 进度订阅 `task:progress`，按 taskId 过滤，装完刷新本页
+     * ------------------------------------------------------------------ */
+    function openAutoInstall(target, onFinished) {
+      const root = document.getElementById('modal-root');
+      if (!root) return;
+
+      const mcVersion = String(target.mcVersion || target.installedVersion || '');
+      if (!mcVersion) {
+        toast('这个实例没有记录游戏版本，查不了加载器版本', 'warn', 5000);
+        return;
+      }
+      const cur = currentLoaderInfo(target);
+      const REC = pickRecommendedLoader(mcVersion);
+      const needForgeForOF = optiFineNeedsForge(mcVersion);
+
+      const ROWS = [
+        {
+          type: 'vanilla',
+          label: '原版',
+          badge: '不带模组',
+          desc: '不装加载器。选这个只是把启动方式改回原版，已有的模组文件不会删。',
+        },
+        {
+          type: 'fabric',
+          label: 'Fabric',
+          badge: '轻量',
+          desc: '启动快，Sodium / Iris 这类优化与光影模组都基于它。',
+        },
+        {
+          type: 'forge',
+          label: 'Forge',
+          badge: '模组最多',
+          desc: '老牌加载器，整合包与大型模组生态最全；OptiFine 在 1.13+ 必须配它。',
+        },
+        {
+          type: 'neoforge',
+          label: 'NeoForge',
+          badge: '新一代',
+          desc: 'Forge 的分支，1.20.1 之后的主流选择，兼容大部分新模组。',
+        },
+        {
+          type: 'quilt',
+          label: 'Quilt',
+          badge: '小众',
+          desc: 'Fabric 的分支，兼容部分 Fabric 模组，生态较小。',
+        },
+        {
+          type: 'modloader',
+          label: 'ModLoader',
+          badge: '远古',
+          desc: '1.6.2 / Beta / Alpha 时代的标配，只在真正支持这个版本时才出现。',
+          opt: true,
+        },
+        {
+          type: 'babric',
+          label: 'Babric',
+          badge: '远古 · Fabric 分支',
+          desc: 'b1.7.3 专用的 Fabric 分支，能跑现代性能模组。',
+          opt: true,
+        },
+      ];
+
+      const rowsHTML = ROWS.map(
+        (o) => `<div class="loader-item ${o.opt ? 'loader-item--off' : ''}" role="button" tabindex="0" data-loader="${o.type}">
+          <span class="loader-item__main">
+            <span class="loader-item__title">
+              ${escapeHtml(o.label)}
+              <span class="badge">${escapeHtml(o.badge)}</span>
+              <span class="loader-item__rec" data-rectag="${o.type}" hidden>推荐</span>
+              <span class="loader-item__ver" data-ver="${o.type}">${o.type === 'vanilla' ? '' : '查询版本中…'}</span>
+            </span>
+            <span class="loader-item__desc">${escapeHtml(o.desc)}</span>
+          </span>
+          <span class="loader-item__side">
+            ${
+              o.type === 'vanilla'
+                ? ''
+                : `<label class="loader-item__selwrap" title="想装别的版本就自己挑">
+                     <span class="loader-item__sellabel">版本</span>
+                     <select class="select loader-item__sel" data-selver="${o.type}" hidden></select>
+                   </label>`
+            }
+            <span class="loader-item__go">选中</span>
+          </span>
+        </div>`
+      ).join('');
+
+      root.hidden = false;
+      root.innerHTML = `
+        <div class="modal modal--loader">
+          <div class="modal__head">
+            <div class="modal__title">安装加载器 · ${escapeHtml(target.name || mcVersion)}</div>
+            <button class="winbtn" data-close type="button" title="关闭（Esc）">${icon('close', 14)}</button>
+          </div>
+          <div class="modal__body">
+            <div class="loader-intro">
+              给<strong>已经装好的实例</strong>补装一个模组加载器 —— 只下载加载器，<strong>不会重新下载游戏本体</strong>。
+              <br />
+              <span class="loader-intro__rec" id="vs-al-why">Minecraft ${escapeHtml(mcVersion)}：${escapeHtml(REC.why)}</span>
+              <br />
+              <span class="loader-intro__warn" id="vs-al-warn" hidden></span>
+            </div>
+            <div class="loader-list" id="vs-al-list">${rowsHTML}</div>
+            <div class="loader-extras">
+              <div class="loader-extras__title">另外一起装（可选）</div>
+              <div class="loader-of">
+                <label class="loader-of__check">
+                  <input type="checkbox" id="vs-al-of" disabled />
+                  <span>OptiFine（高清修复）</span>
+                </label>
+                <select class="select loader-of__ver" id="vs-al-of-ver" disabled></select>
+                <span class="loader-of__hint" id="vs-al-of-hint">查询 OptiFine 版本中…</span>
+              </div>
+            </div>
+            <div class="loader-progress" id="vs-al-lp" hidden>
+              <div class="loader-progress__row">
+                <span class="loader-progress__stage" id="vs-al-lp-stage">准备中…</span>
+                <span class="loader-progress__pct" id="vs-al-lp-pct">0%</span>
+              </div>
+              <div class="progress"><div class="progress__bar" id="vs-al-lp-bar" style="width:0%"></div></div>
+            </div>
+            <div class="loader-hint">★ 加载器版本默认挑最新稳定版；想用旧版（比如整合包指定的那个）就在右边的下拉里自己选。</div>
+          </div>
+          <div class="modal__foot">
+            <button class="btn btn--ghost" data-act="cancel" id="vs-al-cancel" type="button">取消</button>
+            <button class="btn btn--primary" data-act="go" id="vs-al-go" type="button" disabled>开始安装</button>
+          </div>
+        </div>`;
+
+      const modal = root.firstElementChild;
+      const lp = modal.querySelector('#vs-al-lp');
+      const lpStage = modal.querySelector('#vs-al-lp-stage');
+      const lpPct = modal.querySelector('#vs-al-lp-pct');
+      const lpBar = modal.querySelector('#vs-al-lp-bar');
+      const goBtn = modal.querySelector('#vs-al-go');
+      const cancelBtn = modal.querySelector('#vs-al-cancel');
+      const ofBox = modal.querySelector('#vs-al-of');
+      const ofSel = modal.querySelector('#vs-al-of-ver');
+      const ofHint = modal.querySelector('#vs-al-of-hint');
+
+      /** verMap[type] = { versions, latest, label? } / null（查不到或不支持）/ undefined（查询中） */
+      const verMap = Object.create(null);
+      let picked = null;
+      let running = false;
+      let taskId = '';
+      let offProg = null;
+      let doneTimer = null;
+      let watchdog = null;
+      let autoSwitching = false;
+
+      const finish = () => {
+        if (doneTimer) clearTimeout(doneTimer);
+        if (watchdog) clearTimeout(watchdog);
+        doneTimer = null;
+        watchdog = null;
+        if (typeof offProg === 'function') offProg();
+        offProg = null;
+        document.removeEventListener('keydown', onKey, true);
+        root.hidden = true;
+        root.innerHTML = '';
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          if (running) {
+            toast('正在安装，先点「取消安装」再关窗口', 'warn', 3000);
+            return;
+          }
+          finish();
+        }
+      };
+      document.addEventListener('keydown', onKey, true);
+
+      /* ---------------- 版本查询 ---------------- */
+      const names = {
+        fabric: 'Fabric',
+        forge: 'Forge',
+        neoforge: 'NeoForge',
+        quilt: 'Quilt',
+        modloader: 'ModLoader',
+        babric: 'Babric',
+        optifine: 'OptiFine',
+      };
+
+      const paintVer = (type) => {
+        const el = modal.querySelector(`[data-ver="${type}"]`);
+        if (!el) return;
+        const info = verMap[type];
+        if (info === undefined) {
+          el.textContent = '查询版本中…';
+          el.className = 'loader-item__ver is-loading';
+          return;
+        }
+        if (!info || (!info.latest && !info.label)) {
+          el.textContent = `该版本没有 ${names[type] || '可用版本'}`;
+          el.className = 'loader-item__ver is-none';
+          return;
+        }
+        if (info.label) {
+          el.textContent = info.label;
+          el.className = 'loader-item__ver is-ok';
+          return;
+        }
+        el.textContent = `最新 ${info.latest}${info.total > 1 ? ` · 共 ${info.total} 个` : ''}`;
+        el.className = 'loader-item__ver is-ok';
+      };
+
+      const isAvail = (type) => {
+        if (type === 'vanilla') return true;
+        const info = verMap[type];
+        if (info === undefined) return true;
+        return !!info;
+      };
+
+      /** 推荐标：等版本查完再标，避免标到「该版本没有 Fabric」的灰行上 */
+      const applyRec = () => {
+        const want = REC.type;
+        modal.querySelectorAll('[data-rectag]').forEach((tag) => {
+          tag.hidden = tag.getAttribute('data-rectag') !== want;
+        });
+        modal.querySelectorAll('[data-loader]').forEach((row) => {
+          row.classList.toggle('is-rec', row.getAttribute('data-loader') === want && isAvail(want));
+        });
+      };
+
+      const loadVer = (type) => {
+        return call('loader:versions', { mcVersion, loader: type }, { optional: true })
+          .then((res) => {
+            const data = res && res.ok !== false ? res.data || res : null;
+            const slot = (data && data[type]) || null;
+            const arr = (slot && Array.isArray(slot.versions) && slot.versions) || [];
+            /**
+             * ModLoader 没有「版本号」这个概念（后端只会给 available + label）
+             * ⇒ 版本下拉要藏起来；Babric 有版本，走普通分支（与 download.js 保持一致）。
+             */
+            if (type === 'modloader') {
+              verMap[type] = slot && slot.available ? { latest: null, total: 0, label: slot.label || names[type] } : null;
+            } else {
+              verMap[type] = arr.length ? { versions: arr, latest: slot.latest || arr[0], total: arr.length } : null;
+            }
+            if (!slot && res && res.error) {
+              const warn = modal.querySelector('#vs-al-warn');
+              if (warn && warn.hidden) {
+                warn.hidden = false;
+                warn.textContent = `加载器版本查询失败（${res.error}），下拉里可能没有版本可挑`;
+              }
+            }
+
+            // 版本下拉：默认最新；如果这个实例已经装过同类加载器，就默认选它装的那个版本
+            const sel = modal.querySelector(`[data-selver="${type}"]`);
+            if (sel) {
+              if (arr.length) {
+                sel.innerHTML = arr
+                  .slice(0, 500)
+                  .map((v, i) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}${i === 0 ? '（最新）' : ''}</option>`)
+                  .join('');
+                if (cur.type === type && cur.version && arr.includes(cur.version)) sel.value = cur.version;
+                sel.hidden = false;
+                sel.addEventListener('change', () => {
+                  const badge = modal.querySelector(`[data-ver="${type}"]`);
+                  if (badge) {
+                    badge.textContent = `已选 ${sel.value}`;
+                    badge.className = 'loader-item__ver is-ok';
+                  }
+                });
+              } else {
+                sel.hidden = true;
+              }
+            }
+
+            if (type === 'optifine') fillOptiFine();
+          })
+          .catch(() => {
+            verMap[type] = null;
+          })
+          .then(() => {
+            // 远古的两个老加载器初始是隐藏的：查完才知道到底支不支持，这时再决定显示与否
+            if (type === 'modloader' || type === 'babric') {
+              const row = modal.querySelector(`[data-loader="${type}"]`);
+              if (row) row.classList.toggle('loader-item--off', !isAvail(type));
+            }
+            paintVer(type);
+            applyRec();
+
+            /**
+             * ★ 任务要求：空数组的加载器要「灰掉」。
+             *   查询中不算否定（isAvail 为 true），查完之后 verMap[type] === null 才是真没有
+             *   ⇒ 加 .is-unavailable（灰 + 不可点），并且如果它正好是刚才预选中的那个，就取消选中，
+             *     免得用户以为「已经选好了」却提交一个没有版本的加载器。
+             */
+            if (type !== 'vanilla' && verMap[type] === null) {
+              const row = modal.querySelector(`[data-loader="${type}"]`);
+              if (row) row.classList.add('is-unavailable');
+              if (picked === type) {
+                picked = null;
+                modal.querySelectorAll('[data-loader]').forEach((r) => r.classList.remove('is-picked'));
+                if (goBtn) goBtn.disabled = true;
+              }
+            }
+          });
+      };
+
+      /* ---------------- OptiFine ---------------- */
+      const fillOptiFine = () => {
+        const info = verMap.optifine;
+        const list = (info && Array.isArray(info.versions) && info.versions) || [];
+        if (!list.length) {
+          ofSel.innerHTML = '';
+          ofSel.disabled = true;
+          ofBox.disabled = true;
+          ofBox.checked = false;
+          ofHint.textContent = `这个版本没有 OptiFine（${mcVersion}）`;
+          return;
+        }
+        ofSel.innerHTML = list
+          .map((v, i) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}${i === 0 ? '（最新）' : ''}</option>`)
+          .join('');
+        ofSel.disabled = false;
+        ofBox.disabled = false;
+        ofHint.textContent = needForgeForOF
+          ? '这个版本要装在 Forge 上，勾选后会自动把加载器切成 Forge'
+          : '这个版本用官方补丁模式装，可以单独装，也可以配 ModLoader';
+        // 实例本来就带 OptiFine → 默认勾上并选回原来的版本
+        if (cur.optifine) {
+          ofBox.checked = true;
+          if (list.includes(cur.optifine)) ofSel.value = cur.optifine;
+          enforceOptiFineLoader();
+        }
+      };
+
+      /** 勾了 OptiFine 且 1.13+ 却不是 Forge/NeoForge → 自动切 Forge 并提示一次 */
+      const enforceOptiFineLoader = () => {
+        if (!ofBox || !ofBox.checked) return;
+        if (autoSwitching) return;
+        if (!needForgeForOF) return;
+        if (picked === 'forge' || picked === 'neoforge') return;
+        const forgeRow = modal.querySelector('[data-loader="forge"]');
+        if (!forgeRow) return;
+        autoSwitching = true;
+        forgeRow.click();
+        autoSwitching = false;
+        toast('1.13 及以后的 OptiFine 需要 Forge，已自动把加载器切成 Forge', 'info', 5000);
+      };
+
+      /* ---------------- 选中 / 提交 ---------------- */
+      modal.querySelectorAll('[data-loader]').forEach((row) => {
+        const type0 = row.getAttribute('data-loader');
+        const innerSel = modal.querySelector(`[data-selver="${type0}"]`);
+        if (innerSel) {
+          ['click', 'mousedown'].forEach((ev) => innerSel.addEventListener(ev, (e) => e.stopPropagation()));
+        }
+        row.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            row.click();
+          }
+        });
+        row.addEventListener('click', () => {
+          if (running) return;
+          if (row.classList.contains('loader-item--off')) return;
+          if (row.classList.contains('is-unavailable')) return;
+          picked = row.getAttribute('data-loader');
+          modal.querySelectorAll('[data-loader]').forEach((r) => r.classList.toggle('is-picked', r === row));
+          if (goBtn) goBtn.disabled = false;
+          enforceOptiFineLoader();
+        });
+      });
+
+      if (ofBox) ofBox.addEventListener('change', () => enforceOptiFineLoader());
+
+      const setProgress = (stage, pct, state) => {
+        lp.hidden = false;
+        lp.classList.toggle('is-error', state === 'error');
+        lp.classList.toggle('is-done', state === 'done');
+        lpStage.textContent = stage;
+        const n = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+        lpPct.textContent = `${n}%`;
+        lpBar.style.width = `${n}%`;
+      };
+
+      const submit = async () => {
+        if (running) return;
+        const type = picked || 'vanilla';
+        let ver;
+        if (type !== 'vanilla' && type !== 'modloader') {
+          const selEl = modal.querySelector(`[data-selver="${type}"]`);
+          ver = (selEl && !selEl.hidden && selEl.value ? String(selEl.value) : '') || (verMap[type] && verMap[type].latest) || undefined;
+        }
+
+        const payload = { id: target.id, mcVersion };
+        // ★ 选「原版」时 loader 传 null（把实例改回原版启动），不是省略字段
+        payload.loader = type === 'vanilla' ? null : { type, ...(ver ? { version: ver } : {}) };
+
+        // ★ 没勾 OptiFine 就**不要**带这个字段：后端用 `!== undefined` 判定
+        let optifineVersion;
+        if (ofBox && ofBox.checked && !ofBox.disabled) {
+          optifineVersion = ofSel && ofSel.value ? String(ofSel.value) : '';
+        }
+        if (optifineVersion !== undefined) payload.optifineVersion = optifineVersion;
+
+        running = true;
+        goBtn.disabled = true;
+        goBtn.textContent = '正在安装…';
+        cancelBtn.textContent = '取消安装';
+        setProgress(`正在安装 ${type === 'vanilla' ? '原版' : names[type] || type}…`, 0);
+
+        const r = await call('install:start', payload, { optional: true });
+        if (!r.ok && (!r.data || !r.data.taskId)) {
+          running = false;
+          goBtn.disabled = false;
+          goBtn.textContent = '开始安装';
+          cancelBtn.textContent = '取消';
+          setProgress(r.error || '安装启动失败', 0, 'error');
+          toast(r.error || '安装启动失败', 'error', 6000);
+          return;
+        }
+
+        taskId = String((r.data && r.data.taskId) || '');
+        if (!taskId) {
+          // 后端没给 taskId：没法订阅进度，如实告诉用户去看下载页的任务条
+          running = false;
+          goBtn.disabled = false;
+          goBtn.textContent = '重新安装';
+          setProgress('已提交安装（没有拿到任务 ID，进度请看「下载」页的安装任务）', 0);
+          return;
+        }
+
+        offProg = on('task:progress', (p) => {
+          if (!p || String(p.taskId) !== taskId) return;
+          const pct = Number.isFinite(Number(p.percent))
+            ? Number(p.percent)
+            : p.total
+              ? (Number(p.current) / Number(p.total)) * 100
+              : 0;
+          const stage = String(p.stage || p.phase || '安装中…');
+          setProgress(stage, pct);
+          if (p.done !== true) return;
+
+          if (watchdog) {
+            clearTimeout(watchdog);
+            watchdog = null;
+          }
+
+          if (p.error || p.ok === false) {
+            running = false;
+            goBtn.disabled = false;
+            goBtn.textContent = '重试';
+            cancelBtn.textContent = '关闭';
+            setProgress(String(p.error || stage || '安装失败'), pct, 'error');
+            toast(String(p.error || '安装失败'), 'error', 7000);
+            if (typeof offProg === 'function') offProg();
+            offProg = null;
+            return;
+          }
+
+          // 成功：**先刷新数据**（用户中途关窗也不会丢），再自动关窗
+          setProgress('装好了，可以回首页启动', 100, 'done');
+          if (typeof offProg === 'function') offProg();
+          offProg = null;
+          toast(`加载器安装完成：${target.name || mcVersion} 现在可以装模组了`, 'ok', 5200);
+          void (async () => {
+            try {
+              await loadInstances();
+              notify('instances');
+              if (typeof onFinished === 'function') onFinished();
+            } catch (err) {
+              console.warn('[QCL] 刷新实例失败（不影响安装结果）：', err);
+            }
+          })();
+          doneTimer = setTimeout(() => finish(), 1600);
+        });
+
+        // 兜底：5 分钟还没收到 done，就别让窗口一直显示「正在安装」
+        watchdog = setTimeout(() => {
+          if (!running) return;
+          running = false;
+          goBtn.disabled = false;
+          goBtn.textContent = '重新安装';
+          cancelBtn.textContent = '关闭';
+          setProgress('好久没收到安装进度了（可能已结束或卡住），可以关掉窗口后看实例状态', 0, 'error');
+          if (typeof offProg === 'function') offProg();
+          offProg = null;
+        }, 5 * 60 * 1000);
+      };
+
+      if (goBtn) goBtn.addEventListener('click', submit);
+
+      if (cancelBtn) {
+        cancelBtn.addEventListener('click', async () => {
+          if (!running) {
+            finish();
+            return;
+          }
+          const ok = await call('install:cancel', { taskId }, { optional: true });
+          if (!ok.ok) {
+            toast(ok.error || '取消失败', 'warn', 4000);
+            return;
+          }
+          running = false;
+          goBtn.disabled = false;
+          goBtn.textContent = '重新安装';
+          cancelBtn.textContent = '关闭';
+          setProgress('已请求取消安装', 0, 'error');
+          if (typeof offProg === 'function') offProg();
+          offProg = null;
+        });
+      }
+
+      modal.querySelector('[data-close]').addEventListener('click', () => {
+        if (running) {
+          toast('正在安装，先点「取消安装」再关窗口', 'warn', 3000);
+          return;
+        }
+        finish();
+      });
+      modal.onmousedown = (e) => {
+        if (e.target === modal && !running) finish();
+      };
+
+      // 异步查版本：原版不用查；OptiFine 也要查（喂勾选框）
+      loadVer('optifine');
+      ROWS.forEach((o) => {
+        if (o.type === 'vanilla') return;
+        loadVer(o.type);
+      });
+
+      // 默认选中：已经装了加载器就选它，否则选推荐项
+      setTimeout(() => {
+        /**
+         * ★ 如果这 80ms 内用户（或自测脚本）已经自己点过一行了，**绝不能**再覆盖他的选择
+         *   —— 否则刚点完「原版」又被自动选回 Fabric，看起来像点不动。
+         */
+        if (picked) return;
+        const want = cur.type !== 'vanilla' ? cur.type : REC.type;
+        const row = modal.querySelector(`[data-loader="${want}"]`);
+        if (row && !row.classList.contains('loader-item--off')) row.click();
+        else {
+          const v = modal.querySelector('[data-loader="vanilla"]');
+          if (v) v.click();
+        }
+        applyRec();
+      }, 80);
     }
 
     draw();

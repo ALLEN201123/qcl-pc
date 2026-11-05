@@ -628,6 +628,71 @@
   min-width: 0;
 }
 
+/* ---- 版本设置 → 模组加载器（给已装实例补装加载器，照 HMCL 自动安装） ---- */
+.loader-current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+}
+.loader-current__label {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.loader-current__value {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-all;
+}
+
+/* 补装加载器弹窗里的进度行（组件层没有，属于这一页的补充样式） */
+.loader-progress {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+}
+.loader-progress__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.loader-progress__stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.loader-progress__pct {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+.loader-progress.is-done .loader-progress__stage {
+  color: var(--ok);
+}
+.loader-progress.is-error .loader-progress__stage {
+  color: var(--danger);
+}
+
+/* 这个 MC 版本没有对应加载器版本 ⇒ 灰掉且不可选（任务要求：「空数组的加载器要灰掉」） */
+.loader-item.is-unavailable {
+  opacity: 0.45;
+  filter: grayscale(0.65);
+  pointer-events: none;
+}
+
 /* ============================ 账号 ============================ */
 
 .acct-add {

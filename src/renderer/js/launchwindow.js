@@ -110,14 +110,17 @@ export function openLaunchWindow({ instance, extra }) {
 /** 标记某阶段开始（后面的自动置回 pending） */
 export function markStage(key, detail) {
   if (!panelEl || !stateMap.has(key)) return;
+  const now = Date.now();
   let reached = false;
   for (const s of STAGES) {
     if (s.key === key) {
       stateMap.set(s.key, 'active');
-      stageAt.set(s.key, Date.now());
+      stageAt.set(s.key, now);
       reached = true;
     } else if (!reached && stateMap.get(s.key) !== 'done') {
+      // ★ 阶段是顺序推进的：上一个阶段在这一刻「完成」，记下来才能算它自己的耗时
       stateMap.set(s.key, 'done');
+      if (!stageDoneAt.has(s.key)) stageDoneAt.set(s.key, now);
     } else if (reached && stateMap.get(s.key) === 'active') {
       stateMap.set(s.key, 'pending');
     }
@@ -130,7 +133,16 @@ export function markStage(key, detail) {
 export function finishLaunch(ok, message) {
   if (!panelEl) return;
   clearLoadingWarning();
-  for (const s of STAGES) stateMap.set(s.key, ok ? 'done' : stateMap.get(s.key));
+  const finNow = Date.now();
+  for (const s of STAGES) {
+    if (ok) {
+      if (stateMap.get(s.key) !== 'done' && !stageDoneAt.has(s.key)) {
+        if (!stageAt.has(s.key)) stageAt.set(s.key, finNow);
+        stageDoneAt.set(s.key, finNow);
+      }
+      stateMap.set(s.key, 'done');
+    }
+  }
   renderStages();
   if (!ok) setMeta(message || '启动失败', true);
   // 成功后 1.2 秒自动关掉，不挡着用户看游戏
@@ -190,7 +202,26 @@ function renderStages() {
   el.innerHTML = STAGES.map((s) => {
     const st = stateMap.get(s.key) || 'pending';
     const t = stageAt.get(s.key);
-    const ms = st === 'done' && t ? `${((Date.now() - startedAt) / 1000).toFixed(1)}s` : '';
+    /**
+     * ★ 2026-11-05 修（用户截图：所有步骤都显示 5.6s）。
+     *
+     * 以前这里算的是 `Date.now() - startedAt` —— 也就是**从启动那一刻到现在的总耗时**，
+     * 于是最后重画时每一行拿到的是同一个数字，看起来像每一阶段都花了 5.6 秒。
+     *
+     * 现在改成**每个阶段自己的耗时**：
+     *   · done：完成时刻（下一个阶段开始的时刻，或最后一次 flush） − 本阶段开始时刻
+     *   · active：从本阶段开始到现在（实时跳）
+     * 没有开始时刻的（一开始就是 done、被跳过）显示空。
+     */
+    let ms = '';
+    if (t) {
+      if (st === 'done') {
+        const doneAt = stageDoneAt.get(s.key) || now;
+        ms = `${(Math.max(0, doneAt - t) / 1000).toFixed(1)}s`;
+      } else if (st === 'active') {
+        ms = `${(Math.max(0, now - t) / 1000).toFixed(1)}s`;
+      }
+    }
     const iconHtml =
       st === 'done'
         ? '<span class="lw__tick">✓</span>'

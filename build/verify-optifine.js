@@ -353,10 +353,77 @@ async function main() {
   console.log(`  mod 模式 → ${JSON.stringify(modPatch)}`);
   check(modPatch.installedVersion === '1.20.1-forge-47.2.18', 'mod 模式：installedVersion 保持原来的 Forge 版本（不被覆盖成 1.20.1）');
   check(modPatch.loader.type === 'forge' && modPatch.loader.version === '47.2.18', 'mod 模式：loader 保持 forge');
+  check(modPatch.loader.optifine === 'HD_U_I6', 'mod 模式：loader 新增 optifine 子字段');
   check(
     typeof modPatch.notes === 'string' && modPatch.notes.startsWith('旧备注') && /OptiFine HD_U_I6 已放入 mods/.test(modPatch.notes),
     'mod 模式：notes 追加了说明（旧备注保留）'
   );
+
+  // ★ 2026-11-05 新契约：Forge + OptiFine 可叠加
+  const comboPatch = installMod.buildInstancePatch({
+    loaderType: 'forge',
+    optifineResult: { mode: 'mod', version: 'HD_U_I6', file: 'D:/x/mods/OptiFine.jar' },
+    targetId: '1.20.1',
+    mcVersion: '1.20.1',
+    instance: { installedVersion: '1.20.1', loader: { type: 'vanilla', version: '' }, notes: '' },
+    optsLoader: { type: 'forge', version: '47.4.28' },
+    installedLoaderVersion: '1.20.1-forge-47.4.28',
+    forgeVersion: '47.4.28',
+  });
+  console.log(`  forge+OptiFine 叠加 → ${JSON.stringify(comboPatch)}`);
+  check(comboPatch.installedVersion === '1.20.1-forge-47.4.28', '叠加：installedVersion = Forge 的版本 id（不能用 mcVersion / OptiFine 版本）');
+  check(
+    comboPatch.loader.type === 'forge' && comboPatch.loader.version === '47.4.28' && comboPatch.loader.optifine === 'HD_U_I6',
+    "叠加：loader = {type:'forge', version, optifine}（原有字段没破坏）"
+  );
+  check(/已叠加 OptiFine HD_U_I6/.test(String(comboPatch.notes || '')), '叠加：notes 记了一行「已叠加 OptiFine」');
+  const comboPatch2 = installMod.buildInstancePatch({
+    loaderType: 'forge',
+    optifineResult: { mode: 'mod', version: 'HD_U_I6' },
+    targetId: '1.20.1',
+    mcVersion: '1.20.1',
+    instance: { installedVersion: '1.20.1-forge-47.4.28', loader: { type: 'forge', version: '47.4.28' }, notes: comboPatch.notes },
+    optsLoader: { type: 'forge', version: '47.4.28' },
+    installedLoaderVersion: '1.20.1-forge-47.4.28',
+    forgeVersion: '47.4.28',
+  });
+  check(String(comboPatch2.notes).split('已叠加 OptiFine').length === 2, '叠加：重复安装不会把 notes 越堆越长（幂等）');
+
+  // 只传 forge、不传 optifineVersion → 行为与以前完全一致
+  const plainForge = installMod.buildInstancePatch({
+    loaderType: 'forge',
+    targetId: '1.20.1',
+    mcVersion: '1.20.1',
+    instance: { installedVersion: '1.20.1', loader: null },
+    optsLoader: { type: 'forge', version: '47.4.28' },
+  });
+  console.log(`  纯 Forge（回归）→ ${JSON.stringify(plainForge)}`);
+  check(plainForge.loader.type === 'forge' && plainForge.loader.version === '47.4.28', '纯 Forge：loader 不变');
+  check(!('optifine' in plainForge.loader), '纯 Forge：loader 里**没有** optifine 字段（行为不变）');
+  check(plainForge.installedVersion === '1.20.1', '纯 Forge：installedVersion 仍是 targetId（行为不变）');
+
+  // fabric + optifineVersion 必须在下载任何东西之前快速失败
+  const quickInst = await instances.create(HOME, { name: '快速失败测试', mcVersion: '1.20.1' });
+  let fabricOfErr = null;
+  const tFabric = Date.now();
+  try {
+    await installMod.install({
+      home: HOME,
+      instanceId: quickInst.id,
+      mcVersion: '1.20.1',
+      loader: { type: 'fabric', version: '' },
+      optifineVersion: '',
+    });
+  } catch (err) {
+    fabricOfErr = err;
+  }
+  console.log(`  fabric + optifineVersion → code=${fabricOfErr && fabricOfErr.code}｜${fabricOfErr && fabricOfErr.message}（${Date.now() - tFabric} ms）`);
+  check(!!fabricOfErr && fabricOfErr.code === 'E_OPTIFINE_NEED_FORGE', '抛 E_OPTIFINE_NEED_FORGE');
+  check(
+    !!fabricOfErr && /1\.13 以后的 OptiFine 需要 Forge：请把加载器换成 Forge 再一起装。/.test(fabricOfErr.message),
+    '错误文案就是任务书里那句中文'
+  );
+  check(Date.now() - tFabric < 5000, '是「下载前快速失败」（5 秒内返回）', `${Date.now() - tFabric} ms`);
 
   const mlPatch = installMod.buildInstancePatch({
     loaderType: 'modloader',
@@ -375,6 +442,190 @@ async function main() {
     optsLoader: { type: 'fabric', version: '0.16.0' },
   });
   check(fabricPatch.loader.type === 'fabric' && fabricPatch.installedVersion === 'fabric-loader-0.16.0-1.20.1', '普通加载器（Fabric）逻辑不变');
+
+  /* ================================================================
+   * ⑨ / ⑩ 真跑「Forge + OptiFine 组合」
+   * ================================================================ */
+  const SKIP_FORGE = process.argv.includes('--skip-forge');
+  const REAL_HOME = 'C:/Users/123/Documents/QCL';
+  const loaderinstall = require(path.join(CORE, 'loaderinstall.js'));
+  const javaModule = require(path.join(CORE, 'java.js'));
+
+  /** 临时限制 JVM 堆，避免这台内存紧张的小机器被安装器挤爆 */
+  async function withHeapLimit(fn) {
+    const old = process.env._JAVA_OPTIONS;
+    process.env._JAVA_OPTIONS = '-Xmx512m';
+    try {
+      return await fn();
+    } finally {
+      if (old === undefined) delete process.env._JAVA_OPTIONS;
+      else process.env._JAVA_OPTIONS = old;
+    }
+  }
+
+  /** 从官方 manifest 取版本 JSON（必要时把客户端 jar 也下下来给安装器用） */
+  async function prepareVanilla(instanceId, mcVersion, options) {
+    const opts = options || {};
+    const versionsDir = paths.versionsDir(HOME, instanceId);
+    const dir = path.join(versionsDir, mcVersion);
+    fs.mkdirSync(dir, { recursive: true });
+    const manifest = await http.fetchJson('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json', { timeoutMs: 30000 });
+    const hit = manifest.versions.find((v) => v.id === mcVersion);
+    if (!hit) throw new Error(`官方 manifest 里没有 ${mcVersion}`);
+    const vjson = await http.fetchJson(hit.url, { timeoutMs: 30000 });
+    fs.writeFileSync(path.join(dir, `${mcVersion}.json`), JSON.stringify(vjson));
+    if (opts.needJar && vjson.downloads && vjson.downloads.client && vjson.downloads.client.url) {
+      const buf = await http.fetchBuffer(vjson.downloads.client.url, { timeoutMs: 300000 });
+      fs.writeFileSync(path.join(dir, `${mcVersion}.jar`), buf);
+    }
+    return vjson;
+  }
+
+  function pickJavaFor(mcVersion) {
+    return javaModule.detect({ home: HOME }).then((list) => {
+      const best = javaModule.pickBest ? javaModule.pickBest(list, mcVersion) : list[0];
+      return best || null;
+    });
+  }
+
+  section('⑨ 任务指定组合：Forge 26.3（用本机缓存的安装器真跑）+ OptiFine');
+  if (SKIP_FORGE) {
+    console.log('  已按 --skip-forge 跳过真实 Forge 安装（只做快速结构检查）');
+    check(false, '真实 Forge 组合测试被 --skip-forge 跳过（正式验收不要加这个参数）');
+  } else {
+    const cachedInstaller = path.join(REAL_HOME, 'dependencies', 'installers', '26.3-forge-66.1.5-installer.jar');
+    console.log(`  缓存安装器：${cachedInstaller}（${fs.existsSync(cachedInstaller) ? `${fs.statSync(cachedInstaller).size} 字节` : '不存在'}）`);
+    check(fs.existsSync(cachedInstaller), '本机缓存里有 26.3 的 Forge 安装器（直接拷，不联网重下）');
+    let forge263 = null;
+    if (fs.existsSync(cachedInstaller)) {
+      const dstDir = path.join(HOME, 'dependencies', 'installers');
+      fs.mkdirSync(dstDir, { recursive: true });
+      fs.copyFileSync(cachedInstaller, path.join(dstDir, '26.3-forge-66.1.5-installer.jar'));
+      const inst263 = await instances.create(HOME, { name: 'Forge 26.3 组合测试', mcVersion: '26.3' });
+      await prepareVanilla(inst263.id, '26.3', { needJar: false });
+      const java263 = await pickJavaFor('26.3');
+      console.log(`  使用 Java：${java263 && java263.path}（major=${java263 && java263.major}）`);
+      const t263 = Date.now();
+      try {
+        forge263 = await withHeapLimit(() =>
+          loaderinstall.installLoader({
+            home: HOME,
+            instanceDir: inst263.dir,
+            mcVersion: '26.3',
+            loader: { type: 'forge', version: '66.1.5' },
+            javaPath: java263 && java263.path,
+            onLog: (line) => {
+              if (/安装完成|生成|退出|失败|Exception/i.test(String(line))) console.log(`    · ${String(line).slice(0, 140)}`);
+            },
+            onProgress: () => {},
+          })
+        );
+      } catch (err) {
+        console.log(`  ✗ Forge 26.3 安装失败：${err && err.message}`);
+      }
+      console.log(`  Forge 26.3 结果：${JSON.stringify(forge263)}，耗时 ${Math.round((Date.now() - t263) / 1000)} 秒`);
+      check(!!forge263 && forge263.installed === true, 'Forge 26.3 安装器真的跑成功了（不是模拟）');
+      check(!!forge263 && forge263.versionId === '26.3-forge-66.1.5', '生成 Forge 版本 id = 26.3-forge-66.1.5', forge263 && forge263.versionId);
+      const f263Json = forge263 ? path.join(paths.versionsDir(HOME, inst263.id), forge263.versionId, `${forge263.versionId}.json`) : null;
+      check(!!f263Json && fs.existsSync(f263Json), 'Forge 版本目录/JSON 真的生成了', f263Json);
+
+      // 26.3 的 OptiFine：BMCLAPI 实测 0 条 → 必须诚实报「没有版本」，不能假装装上
+      let of263Err = null;
+      try {
+        await optifine.pickVersion('26.3', '', { timeoutMs: 15000 });
+      } catch (err) {
+        of263Err = err;
+      }
+      console.log(`  26.3 的 OptiFine → code=${of263Err && of263Err.code}｜${of263Err && of263Err.message}`);
+      check(!!of263Err && of263Err.code === 'E_OPTIFINE_NO_VERSION', '26.3 没有 OptiFine 版本（上游真的没有，不是我们没实现）');
+      check(!!of263Err && /[\u4e00-\u9fa5]/.test(of263Err.message), '该错误是中文');
+      check(!!f263Json && fs.existsSync(f263Json), 'OptiFine 缺失没有破坏已装好的 Forge（版本 JSON 仍在）');
+      console.log('  ⚠ 结论：26.3 是 2026 年的新版本，OptiFine 官方还没发布对应版本（BMCLAPI 列表 0 条）；');
+      console.log('     所以「26.3 Forge + OptiFine」在现实数据里无法成立。真正的同版本组合见 ⑩（1.20.1）。');
+    }
+  }
+
+  section('⑩ 真实同版本组合：Forge 1.20.1（联网下载安装器真跑）+ OptiFine HD_U_I6 放进 mods/');
+  if (SKIP_FORGE) {
+    console.log('  已按 --skip-forge 跳过');
+    check(false, '真实 Forge+OptiFine 同版本组合被 --skip-forge 跳过（正式验收不要加这个参数）');
+  } else {
+    const instCombo = await instances.create(HOME, { name: 'Forge+OptiFine 组合', mcVersion: '1.20.1' });
+    await prepareVanilla(instCombo.id, '1.20.1', { needJar: true });
+    const javaCombo = await pickJavaFor('1.20.1');
+    console.log(`  使用 Java：${javaCombo && javaCombo.path}（major=${javaCombo && javaCombo.major}）`);
+    const tCombo = Date.now();
+    let forgeCombo = null;
+    try {
+      forgeCombo = await withHeapLimit(() =>
+        loaderinstall.installLoader({
+          home: HOME,
+          instanceDir: instCombo.dir,
+          mcVersion: '1.20.1',
+          loader: { type: 'forge', version: '47.4.28' },
+          javaPath: javaCombo && javaCombo.path,
+          onLog: (line) => {
+            if (/安装完成|生成|退出|失败|Exception/i.test(String(line))) console.log(`    · ${String(line).slice(0, 140)}`);
+          },
+          onProgress: () => {},
+        })
+      );
+    } catch (err) {
+      console.log(`  ✗ Forge 1.20.1 安装失败：${err && err.message}`);
+    }
+    console.log(`  Forge 1.20.1 结果：${JSON.stringify(forgeCombo)}，耗时 ${Math.round((Date.now() - tCombo) / 1000)} 秒`);
+    check(!!forgeCombo && forgeCombo.installed === true && forgeCombo.versionId === '1.20.1-forge-47.4.28', 'Forge 1.20.1 真的装成功', forgeCombo && forgeCombo.versionId);
+
+    // 模拟 ⑤.6 之后的状态：实例已记 forge（install() 里这一步在 ⑥ 落盘）
+    await instances.update(HOME, instCombo.id, { loader: { type: 'forge', version: '47.4.28' } });
+    const instAfterForge = await instances.get(HOME, instCombo.id);
+
+    // ⑤.8 等价动作：OptiFine 走 mod 模式放进 mods/（真实下载 7.1MB）
+    let comboOf = null;
+    let comboErr = null;
+    try {
+      comboOf = await optifine.install({
+        home: HOME,
+        instanceId: instCombo.id,
+        mcVersion: '1.20.1',
+        version: '',
+        mode: 'mod',
+        instance: instAfterForge,
+        onLog: (line) => {
+          if (/放入 mods|下载 OptiFine|校验|已放入/.test(line)) console.log(`    · ${line}`);
+        },
+        onProgress: () => {},
+      });
+    } catch (err) {
+      comboErr = err;
+    }
+    console.log(`  OptiFine 结果：${comboOf ? JSON.stringify({ mode: comboOf.mode, file: comboOf.file, version: comboOf.version }) : `失败：${comboErr && comboErr.message}`}`);
+    check(!!comboOf && comboOf.mode === 'mod', 'OptiFine 以 mod 模式装入（不是 Patcher）');
+    check(!!comboOf && fs.existsSync(comboOf.file), 'OptiFine jar 真的在实例 mods/ 里', comboOf && comboOf.file);
+    check(!!comboOf && /[\\/]mods[\\/]/.test(comboOf.file), '落点确实是 mods/');
+
+    // ⑥ 等价动作：按契约写实例元数据，然后读回验证
+    const comboInstancePatch = installMod.buildInstancePatch({
+      loaderType: 'forge',
+      optifineResult: comboOf,
+      targetId: '1.20.1',
+      instance: instAfterForge,
+      mcVersion: '1.20.1',
+      optsLoader: { type: 'forge', version: '47.4.28' },
+      installedLoaderVersion: forgeCombo && forgeCombo.versionId,
+      forgeVersion: '47.4.28',
+      isLegacyInstall: false,
+    });
+    console.log(`  instance.json patch → ${JSON.stringify(comboInstancePatch)}`);
+    await instances.update(HOME, instCombo.id, comboInstancePatch);
+    const saved = await instances.get(HOME, instCombo.id);
+    console.log(`  读回 instance.json：installedVersion=${saved.installedVersion} loader=${JSON.stringify(saved.loader)}`);
+    check(saved.installedVersion === '1.20.1-forge-47.4.28', 'installedVersion = Forge 的版本 id（没有被 OptiFine 冲掉）');
+    check(saved.loader && saved.loader.type === 'forge' && saved.loader.version === '47.4.28', 'loader.type/version 仍是 forge');
+    check(saved.loader && saved.loader.optifine === 'HD_U_I6', 'loader.optifine = HD_U_I6（新字段有值）');
+    check(!!comboOf && fs.existsSync(comboOf.file), '组合装完后 OptiFine jar 仍在 mods/');
+    console.log(`  组合安装总耗时 ${Math.round((Date.now() - tCombo) / 1000)} 秒`);
+  }
 
   /* ------------------------------------------------------------ 收尾 */
   section('结果');

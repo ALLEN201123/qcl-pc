@@ -155,8 +155,16 @@ function scanLocalVersions(instanceDir) {
   return out;
 }
 
-/** 安装一个版本（后台跑，进度走事件） */
-async function runInstall({ id, mcVersion, loader }) {
+/**
+ * 安装一个版本（后台跑，进度走事件）。
+ *
+ * ★ 2026-11-05：OptiFine 改成**可叠加的附加项** —— `optifineVersion` 与 `loader` 并行传：
+ *   · undefined（没这个字段）→ 不装 OptiFine（Forge 单独装的行为完全不变）
+ *   · ''（空串）            → 装 OptiFine，用最新正式版
+ *   · 'HD_U_I6'             → 装指定版本
+ *   支持 `forge + OptiFine`（1.13+，OptiFine 进 mods/）与 `vanilla + OptiFine`（≤1.12.2，Patcher 打补丁）。
+ */
+async function runInstall({ id, mcVersion, loader, optifineVersion }) {
   const inst = need('instances');
   const installer = need('install');
   const h = home();
@@ -179,8 +187,12 @@ async function runInstall({ id, mcVersion, loader }) {
   const controller = new AbortController();
   installTasks.set(taskId, { controller, instanceId: id, mcVersion });
 
+  const wantsOptifine = optifineVersion !== undefined;
   ctx.log.open(h, 'install');
-  ctx.log.write(`开始安装：实例=${instance.name} 版本=${mcVersion} 加载器=${loader ? `${loader.type} ${loader.version || ''}` : '原版'}`);
+  ctx.log.write(
+    `开始安装：实例=${instance.name} 版本=${mcVersion} 加载器=${loader ? `${loader.type} ${loader.version || ''}` : '原版'}` +
+      ` OptiFine=${wantsOptifine ? (String(optifineVersion || '') || '最新正式版') : '不装'}`
+  );
   const progress = makeProgress(taskId);
   progress({ phase: 'prepare', stage: '准备中', current: 0, total: 1 });
 
@@ -192,6 +204,8 @@ async function runInstall({ id, mcVersion, loader }) {
         instanceId: id,
         mcVersion,
         loader: loader || null,
+        // ★ 可叠加的 OptiFine：必须原样透传（undefined 与 '' 语义不同，不能 `|| ''`）
+        optifineVersion,
         // ★ 把设置传下去：OptiFine / Forge 安装器要用「设置 → Java」里指定的 Java，
         //   没有它就只能靠自动探测（用户手填的 Java 路径会被忽略）。
         settings: ctx.settings.get(),

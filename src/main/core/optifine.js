@@ -642,8 +642,10 @@ function readEntryText(zipPath, entryName) {
  * 安装 OptiFine。
  *
  * @param {{home:string, instanceId:string, mcVersion:string, version?:string,
- *          instance?:object, javaPath?:string, onProgress?:Function, onLog?:Function,
- *          signal?:AbortSignal, timeoutMs?:number}} params
+ *          mode?:'patch'|'mod', instance?:object, javaPath?:string,
+ *          onProgress?:Function, onLog?:Function, signal?:AbortSignal, timeoutMs?:number}} params
+ *   `mode` 可显式覆盖按 MC 版本自动推断的安装方式（例如 1.12.2 + Forge 时要把 OptiFine 当 mod 放 mods/，
+ *   而不是跑 Patcher —— Forge 已经在用 launchwrapper，再打补丁会打架）。
  * @returns {Promise<object>} 模式 A：{mode:'patch', versionId, versionJson, optifineJar, launchwrapper, …}
  *                            模式 B：{mode:'mod', file, filename, …}
  */
@@ -658,16 +660,17 @@ async function install(params) {
     throw new http.LauncherError(`实例不存在：${instanceId}`, { code: 'E_OPTIFINE_NO_INSTANCE' });
   }
 
+  const mode = opts.mode === 'mod' || opts.mode === 'patch' ? opts.mode : modeFor(mcVersion);
   const entry = await pickVersion(mcVersion, opts.version, {
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,
   });
   const log = logOf(opts.onLog);
   log(
-    `准备安装 ${entry.label}（${entry.filename}，${modeFor(mcVersion) === 'patch' ? 'Patcher 打补丁' : '放进 mods（需要 Forge）'}）`
+    `准备安装 ${entry.label}（${entry.filename}，${mode === 'patch' ? 'Patcher 打补丁' : '放进 mods（需要 Forge）'}）`
   );
 
-  if (modeFor(mcVersion) === 'mod') {
+  if (mode === 'mod') {
     return installAsMod(entry, { ...opts, home, instanceId, mcVersion });
   }
   return installWithPatcher(entry, { ...opts, home, instanceId, mcVersion });
