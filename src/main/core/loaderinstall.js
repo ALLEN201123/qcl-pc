@@ -133,6 +133,64 @@ function ensureLauncherProfiles(gameDir, onLog = () => {}) {
 }
 
 /**
+ * ★★★ 2026-11-05 新增：把安装器写出来的库并进「共享库目录」。
+ *
+ * 官方安装器只认 `--installClient <gameDir>`，所以它把 Forge 的库全部写进
+ * `<实例>/.minecraft/libraries/`。但 QCL 现在的布局是 **libraries 全实例共享**
+ * （`<QCL_HOME>/.minecraft/libraries`），启动时也只从共享目录取。
+ *
+ * 不合并的后果（实测）：Forge 明明装好了，启动前检查报「缺
+ * net/minecraftforge/forge/...-universal.jar」等一堆库，得靠自动补全再下一遍。
+ * ⇒ 安装成功后把实例内的库合并到共享目录（已存在且大小相同就跳过）。
+ */
+function mergeLibrariesIntoShared(home, mcDir, onLog = () => {}) {
+  if (!home) return 0;
+  const from = path.join(mcDir, 'libraries');
+  let to;
+  try {
+    const paths = require('./paths');
+    to = paths.sharedLibrariesDir(home);
+  } catch {
+    to = path.join(home, '.minecraft', 'libraries');
+  }
+  if (!fs.existsSync(from) || path.resolve(from) === path.resolve(to)) return 0;
+  let copied = 0;
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const src = path.join(dir, e.name);
+      const rel = path.relative(from, src);
+      const dest = path.join(to, rel);
+      if (e.isDirectory()) {
+        walk(src);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      try {
+        const sst = fs.statSync(src);
+        if (fs.existsSync(dest)) {
+          const dst = fs.statSync(dest);
+          if (dst.size === sst.size) continue; // 已经有一份一样的
+        }
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(src, dest);
+        copied += 1;
+      } catch {
+        /* 单个文件失败不影响整体 */
+      }
+    }
+  };
+  walk(from);
+  if (copied) onLog(`已把安装器写出的 ${copied} 个库合并到共享 libraries 目录`);
+  return copied;
+}
+
+/**
  * 运行安装器。
  *
  * @returns {Promise<{code:number, output:string[]}>}
@@ -259,6 +317,7 @@ async function installLoader({ home, instanceDir, mcVersion, loader, javaPath, o
       );
     }
     onLog(`安装器返回 ${result.code}，但已生成版本 ${generated.id}，按成功处理`);
+    mergeLibrariesIntoShared(home, mcDir, onLog);
     return { installed: true, versionId: generated.id };
   }
 
@@ -266,6 +325,7 @@ async function installLoader({ home, instanceDir, mcVersion, loader, javaPath, o
   if (!generated) {
     throw new Error('安装器运行完毕，但 versions/ 下没有发现新版本目录');
   }
+  mergeLibrariesIntoShared(home, mcDir, onLog);
   onLog(`安装完成：${generated.id}`);
   return { installed: true, versionId: generated.id };
 }
@@ -275,4 +335,4 @@ function needsInstaller(type) {
   return ['forge', 'neoforge', 'optifine', 'liteloader'].includes(String(type || '').toLowerCase());
 }
 
-module.exports = { installLoader, installerUrls, needsInstaller, findGeneratedVersion };
+module.exports = { installLoader, installerUrls, needsInstaller, findGeneratedVersion, mergeLibrariesIntoShared };

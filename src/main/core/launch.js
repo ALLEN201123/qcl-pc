@@ -391,76 +391,73 @@ async function launch(params) {
     if (check.skipContentCheck) {
       log.log(`跳过游戏文件内容校验：${check.reason}`);
     }
-    if (check.missing.length) {
-      const critical = check.missing.filter((m) => m.critical);
-      const others = check.missing.filter((m) => !m.critical);
-      if (others.length) {
-        log.log(`提示：有 ${others.length} 个非关键文件缺失（${others.slice(0, 3).map((m) => m.name).join(', ')}…），一般是资源/库不全，可重新安装补齐`);
+    /**
+     * ★★★ 2026-11-05 改（用户投诉：缺文件只让他自己去「重新安装」，不给自动补全）。
+     *
+     * 以前：
+     *   · 内容损坏 → 自动修复（好）
+     *   · 文件缺失 → 直接抛「请到版本列表 → 该版本 → 重新安装」（差，等于把活推给玩家）
+     *
+     * 现在统一成「先补，补不动才报错」：
+     *   · 损坏的（有 url）+ 缺失但知道下载地址的 → 一起下载补齐
+     *   · 补完仍然缺的关键文件（例如版本 json 都没了）→ 才抛错
+     */
+    const repairTasks = [];
+    for (const c of check.corrupted) {
+      repairTasks.push({ kind: c.kind, name: c.name, path: c.path, url: c.url, sha1: c.expected });
+    }
+    for (const m of check.missing) {
+      if (m.url) repairTasks.push({ kind: m.kind, name: m.name, path: m.path, url: m.url, sha1: m.sha1 });
+    }
+    const noUrlMissing = check.missing.filter((m) => !m.url);
+
+    if (repairTasks.length) {
+      const downloader = require('./downloader');
+      stage('repair', `补全 ${repairTasks.length} 个文件`, '自动下载，不用你动手');
+      log.log(
+        `检测到 ${check.corrupted.length} 个文件损坏、${check.missing.filter((m) => m.url).length} 个缺失，正在自动补全…`
+      );
+      const repair = await gamecheck.repairFiles({
+        corrupted: [],
+        missing: repairTasks,
+        downloader,
+        source,
+        onProgress: (done, total, name) => {
+          if (name) stage('repair', `补全文件 ${done + 1}/${total}`, name);
+        }
+      });
+      if (repair.repaired.length) {
+        log.log(`已自动补全 ${repair.repaired.length} 个文件：${repair.repaired.map((r) => r.name).join(', ')}`);
       }
+      if (repair.failed.length) {
+        log.log(`补全失败 ${repair.failed.length} 个：${repair.failed.map((f) => `${f.name}（${f.error}）`).join('；')}`);
+        const criticalFailed = repair.failed.filter((f) =>
+          check.missing.concat(check.corrupted).some((x) => x.name === f.name && x.critical)
+        );
+        if (criticalFailed.length) {
+          throw new http.LauncherError(
+            `关键文件自动补全失败：${criticalFailed.map((f) => f.name).join('、')}。` +
+              `请检查网络后重试；还是不行就到「版本列表 → 该版本 → 重新安装」。`,
+            { code: 'E_GAME_FILES' }
+          );
+        }
+      }
+    }
+
+    if (noUrlMissing.length) {
+      const critical = noUrlMissing.filter((m) => m.critical);
       if (critical.length) {
-        // 关键文件缺失 = 游戏根本起不来，这个必须拦
         throw new http.LauncherError(
-          `游戏文件缺失：${critical.map((m) => m.name).join('、')}。请到「版本列表 → 该版本 → 重新安装」补齐`,
+          `游戏文件缺失且无法自动补全：${critical.map((m) => m.name).join('、')}。` +
+            `请到「版本列表 → 该版本 → 重新安装」补齐`,
           { code: 'E_GAME_FILES' }
         );
       }
-    }
-    if (check.corrupted.length) {
-      /**
-       * ★★★ 检测到损坏 → **真的修**（2026-11-05 改）。
-       *
-       * 以前这里只打一行提示「N 个文件内容与官方记录不一致…若启动异常可重新安装」，
-       * 然后就继续启动 —— 用户看到游戏崩了却不知道怎么修。
-       * 实测踩到的：26.3.jar 与 fastutil/icu4j 内容损坏，
-       * 报错是 `NoClassDefFoundError` 和 `ZipFile invalid LOC header`，
-       * 从错误信息根本看不出「文件坏了、重下就好」。
-       * ⇒ 现在直接按 sha1 重新下载，下完再校验，失败才报错。
-       */
-      const criticalCorrupted = check.corrupted.filter((c) => c.critical || c.kind === 'client-jar');
-      log.log(
-        `检测到 ${check.corrupted.length} 个文件损坏（${check.corrupted
-          .slice(0, 3)
-          .map((c) => c.name)
-          .join(', ')}${check.corrupted.length > 3 ? '…' : ''}），正在自动修复…`
-      );
-
-      try {
-        const downloader = require('./downloader');
-        const repair = await gamecheck.repairFiles({
-          corrupted: check.corrupted,
-          missing: check.missing.filter((m) => !!m.url),
-          downloader,
-          source,
-          onProgress: (done, total, name) => {
-            if (name) stage('repair', `修复文件 ${done + 1}/${total}`, name);
-          }
-        });
-
-        if (repair.repaired.length) {
-          log.log(`已修复 ${repair.repaired.length} 个文件：${repair.repaired.map((r) => r.name).join(', ')}`);
-        }
-        if (repair.failed.length) {
-          log.log(`修复失败 ${repair.failed.length} 个：${repair.failed.map((f) => `${f.name}（${f.error}）`).join('；')}`);
-          // 关键文件（客户端 jar）修不好就没必要硬启了，给明确指引
-          const criticalFailed = repair.failed.some((f) =>
-            criticalCorrupted.some((c) => c.name === f.name)
-          );
-          if (criticalFailed) {
-            throw new http.LauncherError(
-              `客户端 jar 损坏且自动修复失败：${repair.failed.map((f) => f.name).join('、')}。` +
-                `请检查网络后到「版本列表 → 该版本 → 重新安装」。`,
-              { code: 'E_CORRUPTED_FIX_FAILED' }
-            );
-          }
-        }
-      } catch (err) {
-        if (err && err.code === 'E_CORRUPTED_FIX_FAILED') throw err;
-        log.log(`警告：自动修复失败（${err?.message || err}），按原样继续启动`);
-      }
+      log.log(`提示：${noUrlMissing.length} 个非关键文件缺失（无下载地址），一般不影响启动`);
     }
   } catch (err) {
     // ★ 检查本身出错绝不能拦住启动（宁可让游戏试着跑，也不要因为检查器 bug 打不开）
-    if (err && err.code === 'E_GAME_FILES') throw err;
+    if (err && (err.code === 'E_GAME_FILES' || err.code === 'E_CORRUPTED_FIX_FAILED')) throw err;
     log.log(`警告：游戏文件检查失败（${err && err.message ? err.message : err}），跳过检查继续启动`);
   }
 

@@ -242,10 +242,35 @@ async function checkGameFiles(opts = {}) {
   const corrupted = [];
 
   // ---- 1. 关键文件：版本 jar / json ----
-  const jarPath = path.join(versionDir, `${versionId}.jar`);
+  /**
+   * ★★★ 2026-11-05 修（用户实例报「游戏文件缺失：fabric-loader-0.20.1-26.3.jar」）。
+   *
+   * Fabric / Quilt / Forge 这些加载器版本都是 `inheritsFrom` 的**空壳**：
+   * 它们的版本目录里只有一个 json，**根本没有自己的 jar** —— 客户端 jar 在父版本目录里
+   * （`resolved.clientJarId` 就是父版本 id）。
+   *
+   * 以前这里一律找 `<当前版本id>.jar`，于是任何一个加载器版本启动前都会被判「缺 jar」，
+   * 报一句「请到版本列表重新安装」，玩家重装一百次也没用。
+   * ⇒ 现在按 clientJarId 找父版本的 jar。
+   */
+  const clientJarId = resolved.clientJarId || resolved.jar || versionId;
+  const jarPath =
+    clientJarId === versionId
+      ? path.join(versionDir, `${versionId}.jar`)
+      : path.join(minecraftDir, 'versions', clientJarId, `${clientJarId}.jar`);
+  const jarName = `${clientJarId}.jar`;
   const jsonPath = path.join(versionDir, `${versionId}.json`);
+  const clientDl0 = resolved.downloads && resolved.downloads.client;
   if (!existsNonEmpty(jarPath)) {
-    missing.push({ kind: 'client-jar', path: jarPath, name: `${versionId}.jar`, critical: true });
+    missing.push({
+      kind: 'client-jar',
+      path: jarPath,
+      name: jarName,
+      critical: true,
+      // ★ 带上下载地址：启动前就能自动补下，别再让玩家去「重新安装」
+      url: (clientDl0 && clientDl0.url) || resolved.archiveJarUrl || null,
+      sha1: (clientDl0 && clientDl0.sha1) || null
+    });
   }
   if (!existsNonEmpty(jsonPath)) {
     missing.push({ kind: 'version-json', path: jsonPath, name: `${versionId}.json`, critical: true });
@@ -277,7 +302,7 @@ async function checkGameFiles(opts = {}) {
           corrupted.push({
             kind: 'client-jar',
             path: jarPath,
-            name: `${versionId}.jar`,
+            name: jarName,
             expected: clientDl.sha1,
             actual,
             url: clientDl.url,
