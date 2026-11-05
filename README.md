@@ -2,7 +2,7 @@
 
 > QCL（Quanta Craft Launcher，量子方块启动器）的 **Windows 桌面版**。
 > 全中文界面，基于 Electron。启动核心参照 MultiMC 源码实现，界面照安卓版 QCL 1.5.9 的新排版，
-> 远古版本与加载器方案参照 Betacraft / HMCL。
+> 远古版本方案与归档/代理依赖 Betacraft，加载器、联机、OptiFine 方案参照 HMCL，版式参照 FCL。
 
 **仓库**：<https://github.com/ALLEN201123/qcl-pc> · **下载**：<https://github.com/ALLEN201123/qcl-pc/releases>
 **许可**：GNU GPL-3.0（见 [LICENSE](LICENSE)）
@@ -169,14 +169,14 @@ qcl-pc/
 - 还没从 Betacraft 移植的：皮肤站、一体化老版本认证服务、服务器列表与在线人数、网页版档案浏览。
 - 尚未移植的 HMCL 功能：NBT 编辑器、截图管理页、投影（Schematics）管理、启动器自更新检查、下载限速/断点续传、自动定时备份。
 
-## 与安卓版 / MultiMC / HMCL 的关系
+## 与安卓版 QCL / MultiMC / HMCL / Betacraft / FCL 的关系
 
 | | 说明 |
 |---|---|
 | **安卓版 QCL** | 界面与功能的产品来源（1.5.9）。远古版本清单、中文补丁、主题色、排版都照它。 |
 | **MultiMC** | 启动核心的**实现参照**（C++/Qt 源码，只读）。库规则匹配、natives 解压、资源索引、Java 检测、命令行拼装。 |
-| **HMCL** | 目录布局、自动安装加载器、Terracotta 联机、OptiFine 安装策略的参照。 |
-| **Betacraft** | 远古版本归档与老版本兼容参数的思路来源。 |
+| **HMCL** | 目录布局、自动安装加载器、Terracotta 联机、OptiFine 安装策略的参照；游戏内签名与环境变量（`HMCL_VERSION` → `QCL_VERSION`）也照它的做法。 |
+| **Betacraft** | **实际在用的运行依赖**，不只是思路来源：258 条远古版本归档清单与 `.info` 清单、`.info` 还原启动结构、74 个官方已删除周快照的 jar 直链、`-Dhttp.proxyHost=betacraft.uk` 老版本皮肤/会话/资源代理、老版本音效资源对象，全部来自 Betacraft。 |
 | **FCL** | 安卓版界面版式的参照（左常驻栏 + 右账号/启动栏 + 中间公告与 3D 人物）。 |
 
 ## 界面：窗口边缘与壁纸的融合
