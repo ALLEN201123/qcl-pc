@@ -291,7 +291,7 @@ async function bindTerracotta(mount) {
     const stRes = await call('terracotta:status');
     const st = (stRes && stRes.data) || {};
     if (!st.running) {
-      const started = await call('terracotta:start', { portTransfer: 0 });
+      const started = await call('terracotta:start', {});
       if (!started || !started.ok) {
         btn.disabled = false;
         setHTML(box, html`<div class="tool-warn">${(started && started.error) || '启动失败'}</div>`);
@@ -321,7 +321,7 @@ async function bindTerracotta(mount) {
     const stRes = await call('terracotta:status');
     const st = (stRes && stRes.data) || {};
     if (!st.running) {
-      const started = await call('terracotta:start', { portTransfer: 0 });
+      const started = await call('terracotta:start', {});
       if (!started || !started.ok) {
         btn.disabled = false;
         setHTML(box, html`<div class="tool-warn">${(started && started.error) || '启动失败'}</div>`);

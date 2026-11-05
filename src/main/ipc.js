@@ -926,12 +926,25 @@ const handlers = {
       return { ok: false, error: err?.message || String(err) };
     }
   },
-  'terracotta:start': async ({ portTransfer }) => {
+  'terracotta:start': async ({ playerName }) => {
     const tc = need('terracotta');
     try {
+      /**
+       * ★ 2026-11-05 重写：真实协议是 `--hmcl <临时文件>` + 本机 HTTP 控制端口，
+       *   不再是「stdout 读 JSON / stdin 发命令」。玩家名用于房主/访客互相显示。
+       */
+      let name = String(playerName || '').trim();
+      if (!name) {
+        try {
+          const acc = (await need('accounts').list(home())).find((a) => a.selected);
+          if (acc && acc.name) name = acc.name;
+        } catch {
+          /* 拿不到就用默认名 */
+        }
+      }
       const r = await tc.start({
         home: home(),
-        portTransfer: Number(portTransfer) || 0,
+        playerName: name,
         onState: (st) => send('terracotta:state', st),
         onLog: (line) => {
           ctx.log.write(line);
@@ -945,14 +958,15 @@ const handlers = {
   },
   'terracotta:host': async () => {
     try {
-      return { ok: true, sent: need('terracotta').startHost() };
+      // ★ 现在是异步的（要拉节点列表 + 打本机 HTTP）
+      return { ok: true, result: await need('terracotta').startHost() };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
   },
   'terracotta:join': async ({ code }) => {
     try {
-      return { ok: true, sent: need('terracotta').joinRoom(code) };
+      return { ok: true, result: await need('terracotta').joinRoom(code) };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }

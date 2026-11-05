@@ -36,6 +36,18 @@ const accountsModule = require('./accounts');
 const logger = require('./logger');
 
 const LAUNCHER_NAME = 'QCL';
+/**
+ * ★ 传给游戏的 `--versionType`（玩家在 F3 界面 / 崩溃报告里能看到的那串）。
+ *   形如 `QCL 1.0.0`，一眼能看出「这个游戏是 QCL 起的」。
+ */
+const QCL_VERSION_TYPE = `QCL ${(() => {
+  try {
+    const pkg = jsonstore.readJson(path.join(__dirname, '..', '..', '..', 'package.json'), null);
+    return (pkg && pkg.version) || '1.0.0';
+  } catch (_) {
+    return '1.0.0';
+  }
+})()}`;
 const CLASS_SUFFIX_WIN = ';';
 const CLASS_SUFFIX_OTHER = ':';
 
@@ -212,6 +224,19 @@ function authTokens(account, versionType, versionId) {
     user_type: type === 'microsoft' ? 'msa' : (isLegacy ? 'legacy' : 'msa'),
     user_properties: '{}',
     profile_name: name,
+    /**
+     * ★★★ 2026-11-05 补（实测命令行里原样出现了 `${clientid}` / `${auth_xuid}` 两个字面量）。
+     *
+     * 新版（1.16+）的 version json 里游戏参数带：
+     *     --clientId ${clientid} --xuid ${auth_xuid}
+     * 这两个 token 以前没提供 ⇒ 游戏收到的是字面量字符串。
+     * 游戏不会因此起不来，但微软账号的**联机 / Realms / 统计**会因此缺身份信息。
+     *
+     *   · clientid  —— 登录用的 OAuth 客户端 ID（与 accounts.js 的 CLIENT_ID 一致）
+     *   · auth_xuid —— 玩家 XUID，登录时从 XSTS 的 DisplayClaims.xui[0].xid 取
+     */
+    clientid: accountsModule.CLIENT_ID || '00000000402b5328',
+    auth_xuid: acc.xuid ? String(acc.xuid) : '',
   };
 }
 
@@ -634,7 +659,17 @@ async function launch(params) {
   const tokenMap = Object.assign(
     {
       version_name: versionId,
-      version_type: versionType,
+      /**
+       * ★★★ 2026-11-05：`--versionType` 换成 QCL 的品牌串（用户要求「启动游戏之后要带 QCL 标识」）。
+       *
+       * 这个值是游戏里**玩家真的能看到**的：F3 调试界面左上角显示
+       * `Minecraft 26.3 (release)` —— 括号里就是它；崩溃报告里的 Launcher 一行也是它。
+       * 以前写死 `release`，所以游戏里完全看不出是 QCL 启动的。
+       *
+       * ★ 注意：认证逻辑用的是 `versionType` 变量（old_alpha/old_beta 判定），
+       *   这里只改**传给游戏的显示串**，不影响 authTokens。
+       */
+      version_type: QCL_VERSION_TYPE,
       game_directory: gameDir,
       assets_root: assetsRoot,
       assets_index_name: indexId,

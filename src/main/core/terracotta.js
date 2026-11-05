@@ -7,21 +7,26 @@
  * 房主开一个房间拿到「邀请码」，访客填邀请码后得到一个 `host:port`，
  * 在游戏里当服务器地址填进去就能联机。中转走 Terracotta 官方节点，无需公网 IP。
  *
- * ## PC 端怎么实现（照 HMCL 的 TerracottaMetadata / GeneralProvider）
+ * ## PC 端怎么实现（照 HMCL 的 TerracottaManager / GeneralProvider）
  * Terracotta 在桌面端是一个**独立可执行程序**，不是库：
  *   1. 从 GitHub / Gitee 下载 `terracotta-<ver>-<os>-<arch>-pkg.tar.gz`（tar.gz，内含 exe + VCRUNTIME140.DLL）
  *   2. SHA-512 校验（配置里有每个文件的 hash）
  *   3. 解压到 `<QCL_HOME>/dependencies/terracotta/<ver>/`
- *   4. 启动：`terracotta.exe --hmcl <portTransfer>`
- *      —— `--hmcl` 让它在 stdout 打出结构化状态行，我们解析出来驱动界面
+ *   4. 启动：`terracotta.exe --hmcl <一个临时文件路径>`（**不是端口号**）
+ *      —— 进程会把 `{"port": N}` 写进那个文件，之后全部走本机 HTTP 控制
  *
- * ## 状态协议（HMCL 的 TerracottaState + 安卓版 TerracottaHelper）
- * 进程会持续输出形如 `{"index":N,"state":"waiting|host_scanning|host_ok|guest_connecting|guest_ok|exception", ...}` 的行：
- *   · 房主：state=waiting 时开始扫描，host_ok 时带 `room`（邀请码）
- *   · 访客：填入 room 后进入 guest_connecting，guest_ok 时带 `url`（游戏里填的服务器地址）
+ * ## 状态协议（★ 2026-11-05 按 HMCL 真实实现重写）
+ *   控制端口：`http://127.0.0.1:<port>/state` → `{index, state, room?, url?, …}`
+ *   房主扫描：`/state/scanning?player=…&public_nodes=…`
+ *   访客加入：`/state/guesting?room=…&player=…&public_nodes=…`
+ *   回到空闲：`/state/ide`
+ *   状态名（连字符）→ 这里统一转成下划线给渲染层：
+ *     waiting / host_scanning / host_starting / host_ok / guest_connecting / guest_starting / guest_ok / exception
+ *   · 房主：host_ok 时带 `room`（邀请码）
+ *   · 访客：guest_ok 时带 `url`（游戏里填的服务器地址）
  *
  * ## 诚实说明
- * 这一步依赖**外部可执行文件**与**官方中转节点**。
+ * 这一步依赖**外部可执行文件**与**官方中转节点**（`terracotta.glavo.site/nodes`）。
  * 如果下载失败 / 节点不可用，会给出中文提示，而不是假装连接成功。
  */
 
@@ -217,12 +222,43 @@ function extractTar(buf, outDir) {
 
 /* ------------------------------------------------------------ 运行与状态 */
 
+/**
+ * ★★★ 2026-11-05 重写（原来的实现是**错的**，必须说清楚）。
+ *
+ * 旧实现（错的）：以为 `--hmcl` 之后跟一个端口号，然后从 **stdout 读 JSON 行**、
+ *   往 **stdin 写 `WAITING` / `JOIN xxx`** 命令。
+ *   实测证明这套协议不存在 —— 这个功能从来没跑通过（也从没实测过，是我的问题）。
+ *
+ * HMCL 的真实协议（`vendor/HMCL-latest/.../terracotta/TerracottaManager.java`）：
+ *   1. 启动：`terracotta.exe --hmcl <一个临时文件路径>`
+ *      —— 第二个参数是**文件路径**，不是端口；进程会把 `{"port": N}` 写进这个文件。
+ *   2. 之后全部走 **本机 HTTP**（`http://127.0.0.1:<port>/…`）：
+ *        GET /state?index=N        → 当前状态 JSON（`{index, state, room?, url?, …}`）
+ *        GET /state/scanning?player=xxx&public_nodes=…   → 房主开始扫描
+ *        GET /state/guesting?room=xxx&player=xxx&public_nodes=… → 访客加入
+ *        GET /state/ide            → 回到 idle（退出房间）
+ *        GET /log?fetch=true       → 拿完整日志
+ *   3. 状态名用**连字符**：`waiting` / `host-scanning` / `host-starting` / `host-ok`
+ *      / `guest-connecting` / `guest-starting` / `guest-ok` / `exception`。
+ *      渲染层历史上按 `host_ok` / `guest_ok`（下划线）写的，所以这里统一转成下划线再发出去。
+ *
+ * 节点列表：`https://terracotta.glavo.site/nodes` → `[{url, region}]`（实测 2 个节点可用）。
+ */
+
+const NODE_LIST_URL = 'https://terracotta.glavo.site/nodes';
 /** 正在运行的 Terracotta 进程（单例，和 HMCL 一样一次只能开一个房间） */
 let running = null;
+/** 节点列表缓存 */
+let nodeCache = null;
+
+/** 把 HMCL 的连字符状态名转成渲染层认的下划线形式 */
+function normalizeState(name) {
+  return String(name || '').replace(/-/g, '_');
+}
 
 /**
- * 解析一行输出为状态对象。
- * Terracotta 的 --hmcl 模式会输出 JSON 行；不是 JSON 的行忽略。
+ * 解析一行输出为状态对象（保留给旧测试用）。
+ * 新协议下状态来自 HTTP，不再从 stdout 解析；这里只识别 JSON 行（日志里偶尔会有）。
  */
 function parseStateLine(line) {
   const text = String(line || '').trim();
@@ -231,9 +267,36 @@ function parseStateLine(line) {
     const j = JSON.parse(text);
     if (!j || typeof j !== 'object') return null;
     if (!('state' in j)) return null;
+    if (j.state) j.state = normalizeState(j.state);
     return j;
   } catch {
     return null;
+  }
+}
+
+/** 拉取公共节点列表（失败返回空数组，由调用方兜底） */
+async function fetchNodes() {
+  if (nodeCache) return nodeCache;
+  try {
+    const json = await http.fetchJson(NODE_LIST_URL, { timeoutMs: 15000 });
+    const list = Array.isArray(json) ? json : [];
+    nodeCache = list.map((n) => (n && n.url ? String(n.url) : '')).filter(Boolean);
+  } catch {
+    nodeCache = [];
+  }
+  return nodeCache;
+}
+
+/** 本机 HTTP 请求（Terracotta 控制端口就是本机，不走代理、不加超时重试） */
+async function localGet(port, pathAndQuery) {
+  const url = `http://127.0.0.1:${port}${pathAndQuery}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`Terracotta 控制接口返回 HTTP ${res.status}（${pathAndQuery}）`);
+  const text = await res.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return { raw: text };
   }
 }
 
@@ -242,109 +305,222 @@ function parseStateLine(line) {
  *
  * @param {object} opts
  * @param {string} opts.home
- * @param {number} [opts.portTransfer] 端口转发（HMCL 传 0 让程序自己选）
- * @param {function} opts.onState 收到状态时回调
+ * @param {string} [opts.playerName]  玩家名（房主/访客都会显示给对面）
+ * @param {function} opts.onState     收到状态时回调（state 已归一成下划线）
  * @param {function} [opts.onLog]
- * @returns {Promise<{pid:number}>}
+ * @returns {Promise<{pid:number, port:number}>}
  */
-async function start({ home, portTransfer = 0, onState = () => {}, onLog = () => {} }) {
+async function start({ home, playerName = '', onState = () => {}, onLog = () => {} }) {
   if (running && !running.killed) {
     throw new Error('联机已经在运行了，先关闭当前的房间');
   }
   const exe = exePath(home);
   if (!fs.existsSync(exe)) throw new Error('Terracotta 还没安装，请先点「准备联机组件」');
 
-  onLog(`启动 Terracotta：${exe} --hmcl ${portTransfer}`);
-  const child = spawn(exe, ['--hmcl', String(portTransfer)], {
+  // ① 让 Terracotta 把控制端口写进一个临时文件
+  const portFile = path.join(installDir(home), `port-${Date.now()}.json`);
+  try {
+    fs.unlinkSync(portFile);
+  } catch {
+    /* 不存在更好 */
+  }
+
+  onLog(`启动 Terracotta：${path.basename(exe)} --hmcl ${path.basename(portFile)}`);
+  const child = spawn(exe, ['--hmcl', portFile], {
     cwd: path.dirname(exe),
     windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe']
   });
+  /**
+   * ★★★ 实测发现（2026-11-05）：这个 exe 启动后会**立刻以 0 退出**，
+   *   但它派生的守护进程（另一个 PID）继续跑着 HTTP 服务 —— 探针实测
+   *   `GET /state → 200 {"index":0,"state":"waiting"}` 是通的。
+   *   参数就是 `--hmcl <临时文件路径>`（**单参数**；加个 "2" 会报
+   *   "Unknown arguments"，曾误以为是 portTransfer 值，实测证伪）。
+   *   ⇒ 不能把主进程 exit 当成「联机挂了」，否则轮询会被立刻清掉。
+   */
+  let sawPort = false;
 
   running = {
     child,
     killed: false,
     states: [],
     last: null,
-    startAt: Date.now()
+    startAt: Date.now(),
+    port: 0,
+    playerName: String(playerName || '').trim(),
+    timer: null
   };
 
-  let buf = '';
-  const handleChunk = (chunk) => {
-    buf += chunk.toString('utf8');
-    const lines = buf.split(/\r?\n/);
-    buf = lines.pop() || '';
-    for (const line of lines) {
+  const pump = (chunk) => {
+    for (const line of chunk.toString('utf8').split(/\r?\n/)) {
       if (!line.trim()) continue;
-      const st = parseStateLine(line);
-      if (st) {
-        running.last = st;
-        running.states.push(st);
-        if (running.states.length > 200) running.states.shift();
-        onState(st);
+      // 新版协议：stdout 只是日志；顺手把 JSON 行也当状态收了（兼容）
+      const maybe = parseStateLine(line);
+      if (maybe) {
+        running.last = maybe;
+        running.states.push(maybe);
+        onState(maybe);
       } else {
         onLog(line);
       }
     }
   };
-
-  child.stdout.on('data', handleChunk);
-  child.stderr.on('data', handleChunk);
-
+  child.stdout.on('data', pump);
+  child.stderr.on('data', pump);
   child.on('exit', (code, signal) => {
-    if (running) running.killed = true;
-    onState({ state: 'exited', code, signal });
+    /**
+     * ★★★ 主进程 exit 是**完全正常**的：它把 HTTP 服务交给后台 daemon 后自己退出。
+     *
+     * 千万不要在这里置 running.killed / 清 timer / 发 exited ——
+     * 实测踩过：exit 事件比 waitForPort 的 200ms 轮询早得多，
+     * 于是 `sawPort` 还是 false，一设 killed 就把端口读取直接掐断，
+     * 界面上就变成「启动后立刻退出」（而服务其实好端端跑着）。
+     *
+     * 真正的失败判断只有一条：waitForPort 等 30 秒还拿不到端口。
+     */
+    onLog(`Terracotta 启动进程已退出（code=${code}），服务由后台进程继续提供`);
+    if (running && !sawPort) onLog('（这是正常的，正在等待后台服务写出控制端口）');
   });
 
-  return { pid: child.pid };
+  // ② 等它写出 {"port": N}
+  const port = await waitForPort(portFile, child, onLog, () => {
+    sawPort = true;
+  });
+  running.port = port;
+  running.sawPort = true;
+  onLog(`Terracotta 控制端口：${port}`);
+
+  // ③ 轮询 /state
+  let lastIndex = -1;
+  const tick = async () => {
+    if (!running || running.killed) return;
+    try {
+      const st = await localGet(port, '/state');
+      const index = Number.isFinite(Number(st.index)) ? Number(st.index) : 0;
+      if (index === lastIndex) return;
+      lastIndex = index;
+      const norm = { ...st, state: normalizeState(st.state), room: st.room || st.code || null, url: st.url || null };
+      running.last = norm;
+      running.states.push(norm);
+      if (running.states.length > 200) running.states.shift();
+      onState(norm);
+    } catch (err) {
+      onLog(`读取联机状态失败：${err?.message || err}`);
+    }
+  };
+  await tick();
+  running.timer = setInterval(tick, 400);
+
+  return { pid: child.pid, port };
 }
 
-/** 房主：发一个「重新扫描」指令（写入 stdin） */
-function sendCommand(text) {
-  if (!running || running.killed) throw new Error('联机未启动');
-  try {
-    running.child.stdin.write(`${text}\n`);
-    return true;
-  } catch (err) {
-    throw new Error(`向 Terracotta 发送指令失败：${err?.message || err}`);
-  }
+/** 等 Terracotta 把端口写进文件（最多 30 秒） */
+function waitForPort(portFile, child, onLog = () => {}, onPort = () => {}) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (!running || running.killed) {
+        clearInterval(timer);
+        reject(new Error('Terracotta 启动后立刻退出了，请查看日志'));
+        return;
+      }
+      if (fs.existsSync(portFile)) {
+        try {
+          const j = JSON.parse(fs.readFileSync(portFile, 'utf8'));
+          const port = Number(j && j.port);
+          if (Number.isFinite(port) && port > 0) {
+            clearInterval(timer);
+            onPort();
+            try {
+              fs.unlinkSync(portFile);
+            } catch {
+              /* 删不掉无所谓 */
+            }
+            resolve(port);
+            return;
+          }
+        } catch {
+          /* 文件还没写完，下一轮再试 */
+        }
+      }
+      if (Date.now() - started > 30000) {
+        clearInterval(timer);
+        reject(new Error('Terracotta 30 秒内没有给出控制端口，可能是组件损坏或系统拦截'));
+      }
+    }, 200);
+    // ★ 不监听 child exit：这个 exe 主进程本来就会立刻退出，服务由 daemon 接着跑。
+    //   真正的存活判断交给后面的 /state HTTP 轮询。
+  });
 }
 
-/** 访客：加入房间（把邀请码发给进程） */
-function joinRoom(code) {
+/** 房主：开始扫描端口，拿到邀请码 */
+async function startHost() {
+  if (!running || running.killed) throw new Error('联机还没启动，请先点「启动联机」');
+  const nodes = await fetchNodes();
+  const q = new URLSearchParams();
+  q.set('player', running.playerName || 'QCL玩家');
+  if (nodes.length) for (const n of nodes) q.append('public_nodes', n);
+  const r = await localGet(running.port, `/state/scanning?${q.toString()}`);
+  return r || {};
+}
+
+/** 访客：用邀请码加入房间 */
+async function joinRoom(code) {
+  if (!running || running.killed) throw new Error('联机还没启动，请先点「启动联机」');
   const c = String(code || '').trim();
   if (!c) throw new Error('邀请码不能为空');
-  return sendCommand(`JOIN ${c}`);
-}
-
-/** 房主：开始扫描 */
-function startHost() {
-  return sendCommand('WAITING');
+  const nodes = await fetchNodes();
+  const q = new URLSearchParams();
+  q.set('room', c);
+  q.set('player', running.playerName || 'QCL玩家');
+  if (nodes.length) for (const n of nodes) q.append('public_nodes', n);
+  const r = await localGet(running.port, `/state/guesting?${q.toString()}`);
+  return r || {};
 }
 
 /** 拿到当前可用的游戏服务器地址（房主拿到 room，访客拿到 url） */
 function currentEndpoint() {
   if (!running || !running.last) return null;
   const st = running.last;
-  if (st.room && st.state === 'host_ok') return { kind: 'host', room: st.room };
-  if (st.url && st.state === 'guest_ok') return { kind: 'guest', url: st.url };
+  if (st.state === 'host_ok' && st.room) return { kind: 'host', room: st.room };
+  if (st.state === 'guest_ok' && st.url) return { kind: 'guest', url: st.url };
   return null;
 }
 
 /** 关闭联机 */
 function stop() {
   if (!running) return { ok: true };
-  const { child } = running;
+  const { child, timer, port } = running;
+  if (timer) clearInterval(timer);
   running.killed = true;
+  // ① 礼貌地让它退回 idle
   try {
-    child.stdin.end();
+    if (port) {
+      fetch(`http://127.0.0.1:${port}/state/ide`, { signal: AbortSignal.timeout(1500) }).catch(() => {});
+    }
   } catch {
     /* 忽略 */
   }
+  // ② 主进程通常早就退出了，真正要杀的是监听控制端口的 daemon。
+  //    用 netstat 反查 PID 再 taskkill；找不到就只 kill 主进程（无害）。
   try {
     child.kill();
   } catch {
     /* 忽略 */
+  }
+  if (port && process.platform === 'win32') {
+    try {
+      const { execSync } = require('node:child_process');
+      const out = execSync('netstat -ano -p TCP', { encoding: 'utf8', windowsHide: true });
+      const re = new RegExp(`127\\.0\\.0\\.1:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i');
+      const m = re.exec(out);
+      if (m) {
+        execSync(`taskkill /PID ${m[1]} /F /T`, { windowsHide: true, stdio: 'ignore' });
+      }
+    } catch {
+      /* 杀不掉就留着，下次启动会因全局互斥而报「已经在运行」 */
+    }
   }
   running = null;
   return { ok: true };
@@ -356,6 +532,7 @@ function status() {
   return {
     running: !running.killed,
     pid: running.child.pid,
+    port: running.port || 0,
     last: running.last,
     states: running.states.slice(-10),
     uptimeMs: Date.now() - running.startAt
@@ -378,6 +555,7 @@ function platformInfo() {
 module.exports = {
   TERRACOTTA_VERSION,
   PACKAGE_LINKS,
+  NODE_LIST_URL,
   ensureInstalled,
   isInstalled,
   installDir,
@@ -388,6 +566,8 @@ module.exports = {
   joinRoom,
   startHost,
   currentEndpoint,
+  fetchNodes,
   platformInfo,
-  parseStateLine
+  parseStateLine,
+  normalizeState
 };

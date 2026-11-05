@@ -384,6 +384,36 @@ async function completeMicrosoftLogin(refreshToken, home) {
     && xsts.DisplayClaims.xui[0]
     && xsts.DisplayClaims.xui[0].uhs;
   if (!uhs) throw new http.LauncherError('XSTS 授权失败：返回内容缺少用户哈希');
+  /**
+   * ★★★ 2026-11-05 修：把 XUID 存下来。
+   *
+   * 新版（1.16+）的游戏参数里有 `--xuid ${auth_xuid}` 和 `--clientId ${clientid}`，
+   * 而我们的 tokenMap 里**从来没提供过这两个值** —— 实测命令行里就是原样传了
+   * `${auth_xuid}` / `${clientid}` 两个字面量进去（玩家日志里能看到）。
+   * 游戏自己不读它们也能进，但微软账号的联机 / Realms / 统计会因此缺少身份信息。
+   *
+   * ★ 实测发现：用 `rp://api.minecraftservices.com/` 换的 XSTS，
+   *   `DisplayClaims.xui[0]` **只有 uhs，没有 xid**；
+   *   换成 `RelyingParty: 'http://xboxlive.com'` 再要一次才会有 `xid`（就是 XUID）。
+   *   所以这里额外多问一次，拿不到就算了（绝不阻断登录）。
+   */
+  let xuid = null;
+  try {
+    const xstsForXuid = await postJson(XSTS_URL, {
+      Properties: { SandboxId: 'RETAIL', UserTokens: [xbl.Token] },
+      RelyingParty: 'http://xboxlive.com',
+      TokenType: 'JWT',
+    });
+    xuid =
+      (xstsForXuid &&
+        xstsForXuid.DisplayClaims &&
+        xstsForXuid.DisplayClaims.xui &&
+        xstsForXuid.DisplayClaims.xui[0] &&
+        xstsForXuid.DisplayClaims.xui[0].xid) ||
+      null;
+  } catch (_) {
+    xuid = null;
+  }
 
   // ④ 换 Minecraft access token
   const mc = await postJson(MC_LOGIN_URL, { identityToken: `XBL3.0 x=${uhs};${xsts.Token}` });
@@ -465,6 +495,8 @@ async function completeMicrosoftLogin(refreshToken, home) {
     type: 'microsoft',
     accessToken: mc.access_token,
     refreshToken: newRefresh,
+    /** Xbox 用户 ID（游戏参数 --xuid 用；联机/Realms 需要它） */
+    xuid: xuid || null,
     // 微软令牌默认 24 小时有效，这里保守记 12 小时，过期前由界面提示重新登录
     expiresAt: Date.now() + 12 * 60 * 60 * 1000,
     /** 头像/皮肤贴图地址（皮肤读取走主进程代理，绕过 CSP 的 http 限制） */
@@ -481,11 +513,13 @@ async function completeMicrosoftLogin(refreshToken, home) {
 async function refreshAccount(account, home) {
   if (!account || account.type !== 'microsoft' || !account.refreshToken) return account;
   /**
-   * ★ 令牌还有效、**但皮肤信息丢了**（历史 bug 把 avatar/capeUrl 写成空，
-   *   表现为主界面人物和账号页头像变成史蒂夫）→ 也强制刷新一次把皮肤补回来。
+   * ★ 令牌还有效、但**关键资料缺失**时也强制刷新一次：
+   *   · 皮肤丢了（历史 bug 把 avatar/capeUrl 写成空 → 主界面变史蒂夫）
+   *   · XUID 没存（老版本登录时没采集，`--xuid` 传空会影响微软账号联机 / Realms）
    */
   const skinMissing = !account.avatar && !account.skinUrl;
-  if (!skinMissing && account.expiresAt && account.expiresAt - Date.now() > 10 * 60 * 1000) return account;
+  const xuidMissing = account.type === 'microsoft' && !account.xuid;
+  if (!skinMissing && !xuidMissing && account.expiresAt && account.expiresAt - Date.now() > 10 * 60 * 1000) return account;
   try {
     const fresh = await completeMicrosoftLogin(account.refreshToken, home);
     const merged = {
@@ -498,6 +532,8 @@ async function refreshAccount(account, home) {
       skinUrl: fresh.skinUrl || account.skinUrl || fresh.avatar || account.avatar || null,
       capeUrl: fresh.capeUrl || account.capeUrl || null,
       skinModel: fresh.avatar || fresh.skinUrl ? fresh.skinModel : account.skinModel || 'classic',
+      // ★ XUID 也是「有就更新、没有就保留」
+      xuid: fresh.xuid || account.xuid || null,
     };
     if (home) upsert(home, merged);
     return merged;
