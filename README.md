@@ -33,6 +33,20 @@
 老版本皮肤/会话走 Betacraft 代理、Java 7+ 的 TimSort 兼容参数、老音效资源铺开 —— 另外多了
 **77 组全远古版本中文补丁**（详见「设置 → 关于 → 使用说明」页）。
 
+**全部远古版本（Betacraft 归档 258 条 + 官方 old_alpha/old_beta）装好后，启动时会自动注入这两行 Java 参数**，
+不需要玩家手动设置：
+
+```
+-Dhttp.proxyHost=betacraft.uk
+-Djava.util.Arrays.useLegacyMergeSort=true
+```
+
+覆盖范围包括 pre-classic / classic / indev / infdev / alpha / beta / 1.0 RC / 2.0 愚人节版，
+以及**官方已删除、被 Betacraft 收录的 74 个 11w/12w/13w 周快照**（这些会补进「快照」分页并标「归档」徽标，
+走 `.info` 还原启动结构）。装了 OptiFine / Forge / 中文补丁导致版本目录改名时也照样命中。
+「版本设置 → 启动参数」页有一块卡片显示的就是启动器真正会加的这两行；玩家自己在 JVM 参数里
+写了 `proxyHost` / `useLegacyMergeSort` 时启动器跳过自动注入，不覆盖玩家设置。
+
 ## 主要功能
 
 | 分类 | 内容 |
@@ -48,6 +62,7 @@
 | **Java** | 按 MC 版本自动挑 Java（≤1.16.5→8 / 1.17~1.20.4→17 / 1.20.5~1.21.11→21 / 26.x→25）；没有 Java 时支持免登录一键下载 |
 | **多人联机** | 内置 Terracotta（陶瓦联机）P2P 内网穿透，创建房间/加入房间 |
 | **启动前检查** | 按 sha1 校验客户端 jar 与库，缺失/损坏**自动补全**，不用玩家手动重装 |
+| **更新推送** | 打开主页时静默查 GitHub Releases，发现正式新版显示中文提示条 + 一键跳转（6 小时缓存，离线静默跳过，只提示不自动下载） |
 | **窗口** | 无边框融合窗口，壁纸铺到物理边缘，控件为半透明浮层 |
 
 游戏启动参数里带 `-Dminecraft.launcher.brand=QCL` 和 `--versionType QCL 1.0.0`

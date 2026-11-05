@@ -43,6 +43,7 @@ export const homePage = {
     setHTML(
       mount,
       html`<div class="page page--bare">
+        <div class="home-update" id="home-update" hidden></div>
         <div class="home-tools">
           <button class="btn btn--ghost btn--sm" id="home-import-pack" type="button">${raw(icon('pack', 14))}导入整合包</button>
           <span class="page__sub">支持 QCL 导出的 .zip 与 Modrinth 的 .mrpack —— 导入后自动新建一个实例</span>
@@ -64,6 +65,33 @@ export const homePage = {
 
     const slot = mount.querySelector('#announce-slot');
     const grid = mount.querySelector('#home-grid');
+
+    /* ---------------- 更新提示（未来发布新版时自动推送） ---------------- */
+    /**
+     * 启动时静默查一次 GitHub Releases（主进程 6 小时缓存，离线/失败不打扰玩家）。
+     * 有新版才在页面顶部显示一条中文提示 + 「查看更新」按钮；
+     * 纯提示、不自动下载不自动安装，安装包交给玩家自己双击。
+     */
+    (async () => {
+      const box = mount.querySelector('#home-update');
+      if (!box) return;
+      const r = await call('app:checkUpdate', {}, { optional: true });
+      const d = r && r.ok ? r.data : null;
+      if (!d || !d.hasUpdate) return;
+      box.hidden = false;
+      setHTML(box, html`<div class="home-update__inner">
+        <span class="home-update__dot"></span>
+        <span class="home-update__text">发现新版本 <strong>QCL ${d.latest}</strong>（当前 ${d.current}）—— ${d.releaseName || '点右边看更新内容'}</span>
+        <button class="btn btn--sm" id="home-update-open" type="button">${raw(icon('external', 13))}查看更新</button>
+        <button class="btn btn--ghost btn--sm" id="home-update-close" type="button">稍后</button>
+      </div>`);
+      box.querySelector('#home-update-open').addEventListener('click', () => {
+        call('app:openReleases', {}, { optional: true });
+      });
+      box.querySelector('#home-update-close').addEventListener('click', () => {
+        box.hidden = true;
+      });
+    })();
 
     /* ---------------- 公告卡 ---------------- */
 

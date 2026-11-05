@@ -947,6 +947,11 @@ export const versionSettingPage = {
               <div class="field__hint">在默认参数之后追加。每行一个参数，或用空格分隔。</div>
             </div>
           </div>
+          <div class="card" id="vs-legacy-card">
+            <div class="card__title">远古版本自动注入的 Java 参数</div>
+            <div class="field__hint" id="vs-legacy-hint" style="margin-bottom:8px">正在查询…</div>
+            <div id="vs-legacy-lines"></div>
+          </div>
           <div class="card">
             <div class="card__title">游戏参数（全局，所有实例共用）</div>
             <div class="field">
@@ -963,6 +968,50 @@ export const versionSettingPage = {
         fs = !fs;
         fsEl.classList.toggle('is-on', fs);
       });
+
+      /**
+       * ★ 显示启动器**真正会**给这个实例自动注入的两行远古兼容参数。
+       *   数据来自主进程的 core/legacyargs.js（与 launch.js 共用同一份），
+       *   不是写死的文案 —— 玩家在这里看到什么，启动时就加什么。
+       */
+      const loadLegacyArgs = async () => {
+        const hint = pane.querySelector('#vs-legacy-hint');
+        const lines = pane.querySelector('#vs-legacy-lines');
+        if (!hint || !lines) return;
+        const cur = state.instances.find((x) => x.id === inst.id) || inst;
+        const r = await call('versions:legacyArgs', {
+          id: cur.id,
+          mcVersion: cur.mcVersion || '',
+          installedVersion: cur.installedVersion || '',
+          extraJvmArgs: pane.querySelector('#vs-jvm').value || '',
+        }, { optional: true });
+        const d = r && r.ok ? r.data : null;
+        const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        if (!d) {
+          hint.textContent = '暂时读不到（不影响启动，参数仍会自动注入）';
+          return;
+        }
+        if (!d.legacy) {
+          hint.textContent = `当前版本「${esc(d.versionId)}」不是远古版本，不注入这两行参数。`;
+          lines.innerHTML = '';
+          return;
+        }
+        if (d.overridden) {
+          hint.textContent = '你在上面的 JVM 参数里自己写了代理/排序参数，启动器会跳过自动注入（以你写的为准）。';
+        } else {
+          hint.textContent = `当前版本「${esc(d.versionId)}」是远古版本，启动游戏时会自动加上下面 ${d.args.length} 行（照 Betacraft 兼容方案）：`;
+        }
+        lines.innerHTML = (d.allArgs || [])
+          .map((a) => {
+            const on = !d.overridden && (d.args || []).includes(a);
+            return `<div class="legacy-arg ${on ? 'is-on' : 'is-off'}"><code>${esc(a)}</code><span>${on ? '已启用' : '未启用'}</span></div>`;
+          })
+          .join('');
+      };
+      loadLegacyArgs();
+      // 玩家改了 JVM 参数后实时刷新「是否覆盖」
+      pane.querySelector('#vs-jvm').addEventListener('input', loadLegacyArgs);
+
       pane.querySelector('#vs-args-save').addEventListener('click', async () => {
         const r = await saveSettings({
           launch: {

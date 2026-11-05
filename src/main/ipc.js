@@ -437,6 +437,28 @@ const handlers = {
     return updated;
   },
 
+  // ---------- 启动器更新检查（为未来版本推送做准备） ----------
+  /**
+   * 数据源固定为 GitHub Releases（本仓库）。纯检查不自动下载，
+   * 失败静默，离线不打扰玩家；有 6 小时缓存。
+   */
+  'app:checkUpdate': async ({ force } = {}) => {
+    try {
+      const r = await need('updatecheck').checkUpdate({
+        home: home(),
+        currentVersion: app.getVersion(),
+        force: !!force,
+      });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: true, hasUpdate: false, current: app.getVersion(), latest: app.getVersion(), error: err?.message || String(err) };
+    }
+  },
+  'app:openReleases': async () => {
+    await shell.openExternal(need('updatecheck').RELEASES_URL);
+    return { ok: true };
+  },
+
   // ---------- 版本 ----------
   'versions:manifest': async () => {
     const mod = need('mojang');
@@ -447,7 +469,58 @@ const handlers = {
       source: ctx.settings.value('downloader').source,
       timeoutMs: 20000
     });
-    return { latest: data.latest, versions: data.versions, cached: !!data.cached };
+    /**
+     * ★★★ 2026-11-05 补（用户：「正式版的快照已经被官方弄丢了，被 Betacraft 收录了」）。
+     *
+     * 官方 version_manifest 里有一部分老周快照（11w/12w/13w、1.0 RC 等）
+     * **已经被 Mojang 删掉**，但 Betacraft 归档里还留着 `.info` 与 jar 直链。
+     * 以前「快照」分页只读官方清单 ⇒ 这些版本在 PC 版里一个都看不到、也没法装。
+     *
+     * 现在把「归档里有、官方清单里没有」的快照（type=snapshot）补进快照分页，
+     * 并标 archive:true / source:'betacraft' —— 界面会显示「归档」徽标，
+     * 安装时 install.js 走 `.info` 重建启动结构的路径（不是官方 JSON）。
+     */
+    let versions = Array.isArray(data.versions) ? data.versions.slice() : [];
+    try {
+      const officialIds = new Set(versions.map((v) => String(v && v.id || '').toLowerCase()));
+      const archive = require('./core/data/legacy_version_archive.json');
+      const entries = Array.isArray(archive && archive.entries) ? archive.entries : [];
+      let added = 0;
+      for (const e of entries) {
+        if (!e || !e.id) continue;
+        const id = String(e.id);
+        const key = id.toLowerCase();
+        if (officialIds.has(key)) continue; // 官方还在就不补
+        if (!mod.isWeeklySnapshot(id)) continue; // 只补周快照（远古那条走 versions:ancient）
+        const stamp = e.sortTime || e.compileTime || e.releaseTime || null;
+        versions.push({
+          id,
+          type: 'snapshot',
+          url: e.infoUrl || e.url || null,
+          releaseTime: stamp ? new Date(Number(stamp)).toISOString() : '',
+          time: stamp ? new Date(Number(stamp)).toISOString() : '',
+          sha1: null,
+          archive: true,
+          source: 'betacraft',
+          officialId: false,
+          category: e.category || null,
+        });
+        officialIds.add(key);
+        added += 1;
+      }
+      if (added) {
+        // 新 → 旧排序，和官方清单一致
+        versions.sort((a, b) => {
+          const ta = Date.parse(a.releaseTime || a.time || '') || 0;
+          const tb = Date.parse(b.releaseTime || b.time || '') || 0;
+          return tb - ta;
+        });
+        ctx.log.write(`快照分页补入 Betacraft 归档快照 ${added} 个（官方清单已丢失的那批）`);
+      }
+    } catch (err) {
+      ctx.log.write(`补归档快照失败（不影响官方清单）：${err && err.message ? err.message : err}`);
+    }
+    return { latest: data.latest, versions, cached: !!data.cached };
   },
   'versions:ancient': async () => {
     const mod = need('mojang');
@@ -470,6 +543,31 @@ const handlers = {
     const inst = await mod.get(home(), id);
     if (!inst) return [];
     return scanLocalVersions(inst.dir);
+  },
+  /**
+   * 给「版本设置 → 启动参数」页用：告诉界面启动器**真正会**给这个实例注入
+   * 哪几行远古兼容参数（与 launch.js 共用 core/legacyargs.js，不会说谎）。
+   */
+  'versions:legacyArgs': async ({ id, mcVersion, installedVersion, extraJvmArgs }) => {
+    try {
+      const instMod = need('instances');
+      const inst = id ? await instMod.get(home(), id) : null;
+      const vid = installedVersion || (inst && inst.installedVersion) || mcVersion || (inst && inst.mcVersion) || '';
+      const base = mcVersion || (inst && inst.mcVersion) || vid;
+      const legacy = require('./core/legacyargs');
+      const hit = legacy.isLegacyVersion(vid) || legacy.isLegacyVersion(base);
+      const overridden = legacy.hasPlayerOverride(extraJvmArgs);
+      return {
+        ok: true,
+        versionId: vid,
+        legacy: hit,
+        args: hit && !overridden ? legacy.LEGACY_JVM_ARGS.slice() : [],
+        overridden,
+        allArgs: legacy.LEGACY_JVM_ARGS.slice(),
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
   },
 
   // ---------- 安装 ----------

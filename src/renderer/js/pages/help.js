@@ -26,6 +26,7 @@ const TABS = [
   { id: 'legacy', label: '远古版本 · Betacraft', glyph: 'clock' },
   { id: 'loaders', label: '加载器', glyph: 'pack' },
   { id: 'layout', label: '目录布局', glyph: 'folder' },
+  { id: 'update', label: '更新', glyph: 'refresh' },
   { id: 'faq', label: '常见问题', glyph: 'info' },
 ];
 
@@ -188,6 +189,40 @@ function sectionLegacy() {
       <div class="doc__hint">
         这两个参数如果你自己填过代理或排序参数（版本设置 → 启动参数 → JVM 参数），
         启动器会判断"玩家已自定义"并跳过自动注入，不会覆盖你的设置。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card__title">★ 自动注入的那两行 Java 参数（全部远古版本）</div>
+      <div class="doc__text">
+        玩家下载并装好<strong>任何一个</strong>远古版本后，启动游戏时会自动加上这两行，不需要手动设置：
+      </div>
+      ${raw(`<pre class="doc__pre">-Dhttp.proxyHost=betacraft.uk
+-Djava.util.Arrays.useLegacyMergeSort=true</pre>`)}
+      <div class="doc__text">
+        覆盖范围按 <span class="mono">data/legacy_version_archive.json</span> 的
+        <strong>${count} 条归档清单</strong>精确判定，外加官方 old_alpha / old_beta 前缀 ——
+        pre-classic（rd-/pc-）、classic（c0.）、indev（in-）、infdev（inf-）、alpha（a1.x）、
+        beta（b1.x）、<strong>以及官方已删除、被 Betacraft 收录的 11w/12w/13w 周快照、1.0 RC、2.0 愚人节版</strong>，
+        一个不漏。装了 OptiFine / Forge / 中文补丁导致版本目录改名时也照样命中
+        （同时核对实例里的原始版本号）。
+      </div>
+      <div class="doc__hint">
+        想亲眼确认：<strong>版本设置 → 启动参数</strong> 页里有一块「远古版本自动注入的 Java 参数」，
+        显示的就是启动器真正会加的这两行（现代版本会显示「不注入」）。
+        你在上面自己写了 <span class="mono">proxyHost</span> 或 <span class="mono">useLegacyMergeSort</span>，
+        它会变成「未启用」并说明原因。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card__title">官方删掉、但 Betacraft 还留着的快照</div>
+      <div class="doc__text">
+        Mojang 的 version_manifest 里有一批老周快照已经被删掉了，
+        但 Betacraft 归档里还留着 <span class="mono">.info</span> 与 jar 直链。
+        QCL 把「官方清单里没有、归档里有」的这 <strong>74 个周快照</strong>补进下载页的「快照」分页，
+        卡片上标 <strong>「归档」</strong> 徽标；点安装后走 Betacraft 的
+        <span class="mono">.info</span> 还原启动结构，不需要官方 JSON。
       </div>
     </div>
 
@@ -356,11 +391,45 @@ function sectionFaq() {
   `;
 }
 
+/** 更新推送说明（未来发布新版本时客户端怎么提示） */
+function sectionUpdate() {
+  return html`
+    <div class="card">
+      <div class="card__title">启动器会自己检查新版本</div>
+      <div class="doc__text">
+        每次打开主页，启动器会静默查一次本仓库的
+        <span class="mono">https://github.com/ALLEN201123/qcl-pc/releases/latest</span>：
+        <br />· 发现正式新版本 → 主页顶部出现一条中文提示「发现新版本 QCL x.y.z」+「查看更新」按钮；
+        <br />· 草稿 / 预发布不会提示；离线、被墙、GitHub 限流一律<strong>静默跳过</strong>，不弹错误打扰你；
+        <br />· 结果缓存 6 小时，不会每次都打网络。
+      </div>
+      <div class="doc__hint">
+        <strong>只提示，不自动下载、不自动安装</strong> —— 安装包是 exe，
+        你想升级就点「查看更新」去 Release 页自己下载双击。当前版本在「设置 → 关于」里看。
+      </div>
+    </div>
+    <div class="card">
+      <div class="card__title">以后发新版要做的（给维护者）</div>
+      ${steps([
+        '把 <span class="mono">package.json</span> 的 <span class="mono">version</span> 改成新版本号（如 1.0.1）',
+        '重新打包：<span class="mono">electron-builder --dir</span> + <span class="mono">build/make-installer.ps1 -Version 1.0.1</span>',
+        '在 GitHub 建 <span class="mono">v1.0.1</span> 的 Release（非草稿、非预发布），把 exe 作为资产传上去',
+        '发布完成后，所有旧版客户端下次打开主页就会自动看到更新提示 —— <strong>不需要改客户端代码</strong>',
+      ])}
+      <div class="doc__text">
+        版本号比较按语义版本（1.0.0 &lt; 1.0.1 &lt; 1.1.0），预发布版低于同号正式版。
+        资产名带 <span class="mono">.exe</span> 且含 QCL/Setup/安装 即被识别为安装包。
+      </div>
+    </div>
+  `;
+}
+
 const RENDERERS = {
   chinese: sectionChinese,
   legacy: sectionLegacy,
   loaders: sectionLoaders,
   layout: sectionLayout,
+  update: sectionUpdate,
   faq: sectionFaq,
 };
 

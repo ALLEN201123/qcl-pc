@@ -571,12 +571,18 @@ export const downloadPage = {
        *   · 'archive'  —— 只在内置归档里的（如 2013 的 Minecraft 2.0 三色版，sha1 为 null）→ 标「归档」
        * ★ 不要按 releaseTime 硬编码过滤（归档那 3 条写的是 2013-03-20），直接显示后端给的日期。
        */
+      /**
+       * 来源徽标：
+       *   · 愚人节清单：`source:'manifest'` → 「官方」，`'archive'` → 「归档」
+       *   · ★ 快照分页：官方清单已丢失、由 Betacraft 归档补进来的条目
+       *     （`v.archive === true` / `v.source === 'betacraft'`）→ 「归档」
+       */
       const srcTag =
         extraBadge === '愚人节版本' && (v.source === 'manifest' || v.source === 'archive')
-          ? v.source === 'archive'
+          ? v.source === 'archive' ? '归档' : '官方'
+          : v.archive === true || v.source === 'betacraft'
             ? '归档'
-            : '官方'
-          : '';
+            : '';
       return html`<article class="dlcard dlcard--version" data-id="${v.id}">
         ${iconBox('./assets/icon/ic_grass.png', 'grass')}
         <div class="dlcard__main">

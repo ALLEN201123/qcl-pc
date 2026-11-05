@@ -1563,3 +1563,46 @@ button.dl__follow:hover {
   color: var(--text-3, var(--text-2));
   opacity: .75;
 }
+/* 版本设置 → 启动参数 → 远古自动注入的 Java 参数 */
+.legacy-arg {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  margin-top: 6px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  font-size: 12px;
+}
+.legacy-arg code { color: var(--text); word-break: break-all; }
+.legacy-arg span { flex: 0 0 auto; font-size: 11px; color: var(--text-2); }
+.legacy-arg.is-on span { color: #7ec699; }
+.legacy-arg.is-off { opacity: .6; }
+/* 主页顶部「发现新版本」提示条 */
+.home-update {
+  margin: 0 0 10px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(126, 198, 153, .12);
+  border: 1px solid rgba(126, 198, 153, .45);
+}
+.home-update[hidden] { display: none; }
+.home-update__inner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.home-update__dot {
+  flex: 0 0 auto;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #7ec699;
+  box-shadow: 0 0 8px #7ec699;
+}
+.home-update__text { flex: 1 1 260px; }
+.home-update__text strong { color: #7ec699; }

@@ -708,44 +708,40 @@ async function launch(params) {
   jvmArgs.push('-Dfile.encoding=UTF-8');
 
   /**
-   * ★★★ 远古版本兼容参数（照安卓版 PojavLauncher 第 424~469 行移植）。
+   * ★★★ 远古版本兼容参数（照 Betacraft / 安卓版移植，2026-11-05 修）。
    *
-   * 这些参数不加，远古版本会出现「能启动但进不去世界 / 连不上 / 排序崩」：
+   * 就是用户确认的这两行：
+   *     -Dhttp.proxyHost=betacraft.uk
+   *     -Djava.util.Arrays.useLegacyMergeSort=true
    *
-   *   ① `-Djava.util.Arrays.useLegacyMergeSort=true`
-   *      Java 7+ 的 TimSort 遇到旧版比较器会抛
-   *      "Comparison method violates its general contract!" → 世界加载时崩。
-   *   ② `-Dhttp.proxyHost=betacraft.uk`
-   *      极老版本的会话/资源请求指向早已废弃的地址，走社区 BetaCraft 代理才能通过验证。
-   *
-   * ★ 版本判定必须覆盖**全部**远古前缀（安卓版 1.4.0 修过一次遗漏）：
-   *     inf-* / in-* / pc-* / a* / b* / c0.* / rd-*，以及名字里含 infdev 的。
-   *   漏掉 `in-`（indev）和 `pc-`（pre-classic）会导致「部分远古版本进不了游戏」。
-   *
-   * ★ 玩家可以在「版本设置 → JVM 参数」里显式写 useLegacyMergeSort / proxyHost 覆盖，
-   *   与安卓版同规则：玩家自己写了就不自动加。
+   * ★ 判定逻辑抽到 `core/legacyargs.js`，与「版本设置」界面共用同一份。
+   *   以前这里是手写前缀，实测漏掉 81 个（11w/12w/13w 周快照、1.0.0-rc*、
+   *   2.0_* 愚人节版）；现在按 `legacy_version_archive.json` 的 258 条精确匹配
+   *   + 官方 old_alpha/old_beta 前缀，一个不漏。
+   *   玩家在「版本设置 → JVM 参数」里自己写了代理/排序参数时跳过自动注入。
    */
-  const legacyVerId = String(instance.installedVersion || instance.mcVersion || '').toLowerCase();
-  const isLegacyBuild =
-    legacyVerId.startsWith('inf') ||
-    legacyVerId.startsWith('in-') ||
-    legacyVerId.startsWith('a') ||
-    legacyVerId.startsWith('b') ||
-    legacyVerId.startsWith('c0.') ||
-    legacyVerId.startsWith('pc-') ||
-    legacyVerId.startsWith('rd') ||
-    legacyVerId.includes('infdev');
+  const legacyVerId = String(instance.installedVersion || instance.mcVersion || '');
+  const legacyMod = require('./legacyargs');
+  /**
+   * ★★★ 判定要同时看两个字段（用户追问「所有远古版本装完都自动注入吗」后加固）。
+   *
+   * `installedVersion` 会被加载器改写成变体 id，例如：
+   *   · b1.7.3 + OptiFine 补丁 → `b1.7.3-OptiFine_HD_U_G5`
+   *   · b1.7.3 + Forge        → `b1.7.3-forge-…`
+   * 只看它有可能漏判 ⇒ 只要 `installedVersion` **或** `mcVersion`
+   * （玩家下载时选的原始版本 id，最可靠）任一命中，就注入这两行。
+   */
+  const legacyHit =
+    legacyMod.isLegacyVersion(instance.installedVersion) ||
+    legacyMod.isLegacyVersion(instance.mcVersion);
+  const overridden = legacyMod.hasPlayerOverride(launchCfg.extraJvmArgs);
 
-  if (isLegacyBuild) {
-    const overrides =
-      String(launchCfg.extraJvmArgs || '').includes('useLegacyMergeSort') ||
-      String(launchCfg.extraJvmArgs || '').includes('proxyHost');
-    if (!overrides) {
-      jvmArgs.push('-Dhttp.proxyHost=betacraft.uk');
-      jvmArgs.push('-Djava.util.Arrays.useLegacyMergeSort=true');
-      log.log(`远古版本（${legacyVerId}）：已自动注入兼容参数 -Dhttp.proxyHost=betacraft.uk / -Djava.util.Arrays.useLegacyMergeSort=true`);
-    } else {
+  if (legacyHit) {
+    if (overridden) {
       log.log(`远古版本（${legacyVerId}）：玩家已自定义代理/排序参数，跳过自动注入`);
+    } else {
+      for (const a of legacyMod.LEGACY_JVM_ARGS) jvmArgs.push(a);
+      log.log(`远古版本（${legacyVerId}）：已自动注入兼容参数 ${legacyMod.LEGACY_JVM_ARGS.join(' ')}`);
     }
     // applet 容器尺寸（AlphaVanillaTweakInjector 会优先读这两个属性）
     if (Number.isFinite(Number(launchCfg.width))) jvmArgs.push(`-Dqcl.applet.width=${launchCfg.width}`);
