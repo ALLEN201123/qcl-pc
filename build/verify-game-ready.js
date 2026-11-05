@@ -104,20 +104,27 @@ async function main() {
     '[22:15:02] [Render thread/INFO]: Sound engine started',
     '[22:15:03] [Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png',
   ];
-  for (const line of MODERN) {
-    const ok = launch.isGameReadyLine(line);
-    check(ok, `命中：${line.replace(/^\[[^\]]+\]\s*/, '')}`);
-  }
+  // ★ 强信号：只有 Sound engine started / blocks.png 图集才算「真就绪」。
+  //   Backend library 与 OpenAL initialized on device 都出现得更早，故意不认
+  //   （历史踩坑：认了会早 7 秒关窗）。
+  check(launch.isGameReadyLine(MODERN[2]) === true, '强信号：Sound engine started');
+  check(launch.isGameReadyLine(MODERN[3]) === true, '强信号：blocks.png 图集');
+  check(launch.isGameReadyLine(MODERN[0]) === false, 'Backend library 不算就绪（防早关）');
+  check(launch.isGameReadyLine(MODERN[1]) === false, '现代 OpenAL initialized on device 不算就绪（防早关）');
 
   section('④ 真实日志样例行：老版本（1.6~1.12，Client thread）');
   const OLD = [
     '[22:15:01] [Client thread/INFO]: LWJGL Version: 2.9.4',
     '[22:15:01] [Client thread/INFO]: Setting user: Steve',
     '[22:15:02] [Client thread/INFO]: Starting Minecraft: 1.8.9',
+    '[22:15:03] [Client thread/INFO]: OpenAL initialized.',
   ];
-  for (const line of OLD) {
-    check(launch.isGameReadyLine(line), `命中：${line.replace(/^\[[^\]]+\]\s*/, '')}`);
-  }
+  // ★ 弱信号用 isWeakGameReadyLine；老式 LWJGL2 用 isLegacyGameReadyLine。
+  //   Setting user 故意不在任何判据里（26.3 实测它出现太早）。
+  check(launch.isWeakGameReadyLine(OLD[0]) === true, '弱信号：LWJGL Version: 2.9.4');
+  check(launch.isWeakGameReadyLine(OLD[2]) === true, '弱信号：Starting Minecraft: 1.8.9');
+  check(launch.isWeakGameReadyLine(OLD[1]) === false, 'Setting user 不在判据里（最坑的误报源）');
+  check(launch.isLegacyGameReadyLine(OLD[3]) === true, '老式 LWJGL2：OpenAL initialized.（句点结尾）');
 
   section('⑤ 普通日志行不许命中（防误报）');
   const NOT_READY = [
@@ -138,21 +145,22 @@ async function main() {
   section('⑥ 只触发一次（重复标志 / 后续标志都不再回调）');
   let calls = 0;
   const seen = [];
+  // startedAt 设成 10 秒前，让弱信号/老式信号的延迟门槛已满足
   const det = launch.createGameReadyDetector((line) => {
     calls += 1;
     seen.push(line);
-  });
+  }, { startedAt: Date.now() - 10000 });
   const first = det.feed(MODERN[0]);
   console.log(`  第 1 行（Backend library）feed → ${first}，累计回调 ${calls} 次`);
-  console.log(`  第 2 行（OpenAL initialized）feed → ${det.feed(MODERN[1])}，累计回调 ${calls} 次`);
+  console.log(`  第 2 行（现代 OpenAL on device）feed → ${det.feed(MODERN[1])}，累计回调 ${calls} 次`);
   console.log(`  第 3 行（Sound engine started）feed → ${det.feed(MODERN[2])}，累计回调 ${calls} 次`);
   console.log(`  再喂一次 Sound engine started → ${det.feed(MODERN[2])}，累计回调 ${calls} 次`);
   console.log(`  再喂老版本标志 LWJGL Version → ${det.feed(OLD[0])}，累计回调 ${calls} 次`);
   console.log(`  det.fired=${det.fired}  matchedLine=${det.matchedLine}`);
-  check(first === true, '第一次命中返回 true');
+  check(first === false, 'Backend library 不触发（防早关）');
   check(calls === 1, '整个生命周期只回调一次', `实际 ${calls} 次`);
   check(det.fired === true, 'fired 变为 true');
-  check(det.matchedLine === MODERN[0], 'matchedLine 记录的是第一次命中的那一行');
+  check(det.matchedLine === MODERN[2], 'matchedLine 记录的是 Sound engine started 那一行');
 
   section('⑦ 真实启动顺序模拟（50 行普通日志 + 主循环标志）');
   const log = [];
@@ -174,7 +182,13 @@ async function main() {
   console.log(`  共喂 ${simLinesFed} 行，回调 ${simCalls} 次，首次命中在第 ${firstAt} 行：`);
   console.log(`    ${log[firstAt - 1]}`);
   check(simCalls === 1, '整段启动日志只触发一次');
-  check(firstAt === log.indexOf(OLD[0]) + 1, '命中点是老版本的第一条标志行（LWJGL Version）');
+  // ★ 弱信号有 8 秒门槛（模拟用 startedAt=now，未满），所以末尾的
+  //   `Sound engine started` 强信号才是真正的首次命中点。
+  check(
+    firstAt === log.indexOf(MODERN[2]) + 1,
+    '命中点是强信号 Sound engine started（弱信号未满 8 秒门槛，不抢先）',
+    `首次命中第 ${firstAt} 行 / 强信号在第 ${log.indexOf(MODERN[2]) + 1} 行`
+  );
 
   section('⑧ 回调抛异常不会炸掉检测器');
   let afterThrow = 0;

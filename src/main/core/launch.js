@@ -84,6 +84,27 @@ const GAME_READY_STRONG_RE = /Sound engine started|Created:\s+\d+x\d+(?:x\d+)?\s
  */
 const GAME_READY_WEAK_RE = /LWJGL Version:|Starting Minecraft:/i;
 
+/**
+ * ★★★ 老式 LWJGL 2 版本（远古 b1.7.3 ~ 1.12）通用就绪信号（2026-11-05 修）。
+ *
+ * 用户实测 b1.7.3 的真实日志时序：spawn 18:49:59 →
+ *   18:50:01 `Loading current icons for window from: ...icon_16x16.png`（Display 窗口已建好）→
+ *   18:50:03 `Starting up SoundSystem...` / `Initializing LWJGL OpenAL` →
+ *   18:50:04 `OpenAL initialized.`（音频与主循环就绪）→ 18:50:52 玩家自己退的游戏。
+ * 这里**一行都不匹配**现代/老版那三条判据，于是 `launch:game-ready` 永远不发，
+ * 启动窗口一直挂在「等待游戏窗口」，哪怕游戏跑起来半天。
+ *
+ * ★ 1.0 以上（1.0~1.12）用的也是这套 LWJGL 2 声音系统，同样打
+ *   `OpenAL initialized.` —— 所以这条判据**对所有版本启用**，不只远古。
+ *
+ * ★★ 但必须和现代版的 `OpenAL initialized on device ...` 区分开：
+ *   1.13+ 打的是「OpenAL initialized **on device** 扬声器」，且那行出现在
+ *   `Sound engine started` **之前**（实测误报源）。所以只认**句点结尾、
+ *   不带 on device** 的老式写法。
+ */
+const GAME_READY_LEGACY_RE = /OpenAL initialized\.(?!\s*on\s+device)|Loading current icons for window/i;
+const GAME_READY_LEGACY_MIN_DELAY_MS = 2000;
+
 /** 弱信号生效前的最短等待（毫秒）：给老版本窗口创建留时间 */
 const GAME_READY_WEAK_MIN_DELAY_MS = 8000;
 
@@ -106,6 +127,11 @@ function isWeakGameReadyLine(line) {
   return typeof line === 'string' && GAME_READY_WEAK_RE.test(line);
 }
 
+/** 是不是远古版本（b1.7.3 等）的就绪标志 */
+function isLegacyGameReadyLine(line) {
+  return typeof line === 'string' && GAME_READY_LEGACY_RE.test(line);
+}
+
 /**
  * 创建一次性「游戏就绪」检测器：命中标志时**只**回调一次。
  *
@@ -118,6 +144,8 @@ function isWeakGameReadyLine(line) {
  *
  * @param {(line:string)=>{}} [onReady] 首次命中时回调（异常会被吞掉，不影响游戏）
  * @param {{startedAt?:number, weakMinDelayMs?:number}} [opts]
+ *        （老式 LWJGL 2 判据 GAME_READY_LEGACY_RE 对所有版本都启用，
+ *         靠「句点结尾、不带 on device」自己区分现代版，不需要版本开关）
  */
 function createGameReadyDetector(onReady, opts = {}) {
   let fired = false;
@@ -145,6 +173,15 @@ function createGameReadyDetector(onReady, opts = {}) {
 
       // 强信号：现代版本，窗口已建好，直接认
       if (GAME_READY_STRONG_RE.test(line)) return fire(line);
+
+      // ★ 老式 LWJGL 2（远古 b1.7.3 ~ 1.12）：`OpenAL initialized.`（句点结尾）
+      //   或 `Loading current icons for window`。现代版的
+      //   `OpenAL initialized on device ...` 被正则的 (?!on device) 排除，不会误报。
+      //   对所有版本启用，判据自己区分，不依赖版本开关。
+      if (GAME_READY_LEGACY_RE.test(line) &&
+          Date.now() - startedAt >= GAME_READY_LEGACY_MIN_DELAY_MS) {
+        return fire(line);
+      }
 
       // 弱信号：老版本，必须等够时间（否则窗口还没出来就误报）
       if (GAME_READY_WEAK_RE.test(line) && Date.now() - startedAt >= weakMinDelayMs) {
@@ -874,6 +911,30 @@ async function launch(params) {
     return out;
   };
 
+  /**
+   * ★★★ 游戏内 QCL 签名（照 HMCL，2026-11-05 补）——必须在 substitute 之前塞进 jvmArgs，
+   *   否则 finalArgs 已经拼完，加了也进不了命令行（实测踩过）。
+   *
+   *   · `-Dnet.minecraft.clientmodname=QCL` —— 安卓版 QCL 同款，模组读得到
+   *   · `-Dminecraft.client.jar=<真实 jar>` —— HMCL/安卓版都有，供模组识别版本 jar
+   *   加上原有的 `--versionType QCL 1.0.1`、`-Dminecraft.launcher.brand=QCL`
+   *   与下面的子进程环境变量，构成完整的游戏内签名。
+   */
+  {
+    /**
+     * ★ 加载器版本（fabric-loader-xxx / forge-xxx）是空壳，没有自己的 jar，
+     *   真实客户端 jar 在父版本目录里 —— 用 resolved.clientJarId 定位。
+     */
+    const clientJarId = resolved.clientJarId || resolved.jar || versionId;
+    const clientJarPath = path.join(versionsDir, clientJarId, `${clientJarId}.jar`);
+    if (!jvmArgs.some((a) => a.startsWith('-Dnet.minecraft.clientmodname'))) {
+      jvmArgs.push('-Dnet.minecraft.clientmodname=QCL');
+    }
+    if (fs.existsSync(clientJarPath) && !jvmArgs.some((a) => a.startsWith('-Dminecraft.client.jar'))) {
+      jvmArgs.push(`-Dminecraft.client.jar=${clientJarPath}`);
+    }
+  }
+
   const finalArgs = substitute(jvmArgs).concat([resolved.mainClass], substitute(gameArgs));
 
   // 隐藏日志里的令牌（与 MultiMC censorPrivateInfo 同样的考虑：
@@ -952,11 +1013,25 @@ async function launch(params) {
     log.log(`警告：预设游戏语言异常（${err?.message || err}），继续启动`);
   }
 
+  /**
+   * ★ 子进程环境变量里的 QCL 签名（照 HMCL 的 CheckUpdate.java 注入 HMCL_VERSION）。
+   *   模组 / 工具 / 崩溃报告可读；对应 HMCL_VERSION / HMCL_TAG_NAME。
+   *   （上面 jvmArgs 里已注入 clientmodname / minecraft.client.jar，这里不重复。）
+   */
+  const qclEnv = {
+    ...process.env,
+    QCL_VERSION: launcherVersion(),
+    QCL_TAG_NAME: `v${launcherVersion()}`,
+    QCL_LAUNCHER: LAUNCHER_NAME,
+    QCL_LAUNCHER_VERSION_TYPE: QCL_VERSION_TYPE,
+  };
+
   stage('spawn', '启动 Java 进程', `${javaInfo.version}（${javaInfo.arch}）· 内存 ${memoryMb} MB`);
   const child = spawn(javaPath, finalArgs, {
     cwd: gameDir,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: qclEnv,
   });
 
   const pid = child.pid;
@@ -997,6 +1072,9 @@ async function launch(params) {
     /**
      * ★ 弱信号必须等 spawn 满 8 秒才认（老版本的 LWJGL/Setting user 出现太早，
      *   那时游戏窗口还没建好，直接认会重演「画面没出来窗口就关了」）。
+     * ★ 老式 LWJGL 2 的 `OpenAL initialized.` / icons 判据对所有版本启用，
+     *   覆盖远古 b1.7.3 与 1.0~1.12；现代版的 `OpenAL initialized on device ...`
+     *   由正则自己排除，不会提前误报。
      */
     { startedAt: started }
   );
@@ -1146,5 +1224,8 @@ module.exports = {
   isWeakGameReadyLine,
   GAME_READY_STRONG_RE,
   GAME_READY_WEAK_RE,
+  GAME_READY_LEGACY_RE,
+  GAME_READY_LEGACY_MIN_DELAY_MS,
   createGameReadyDetector,
+  isLegacyGameReadyLine,
 };

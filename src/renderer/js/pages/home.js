@@ -46,6 +46,7 @@ export const homePage = {
         <div class="home-update" id="home-update" hidden></div>
         <div class="home-tools">
           <button class="btn btn--ghost btn--sm" id="home-import-pack" type="button">${raw(icon('pack', 14))}导入整合包</button>
+          <button class="btn btn--ghost btn--sm" id="home-repo" type="button">${raw(icon('external', 14))}GitHub 仓库</button>
           <span class="page__sub">支持 QCL 导出的 .zip 与 Modrinth 的 .mrpack —— 导入后自动新建一个实例</span>
         </div>
         <div class="home" id="home-grid">
@@ -349,6 +350,15 @@ export const homePage = {
 
     const importBtn = mount.querySelector('#home-import-pack');
     if (importBtn) importBtn.addEventListener('click', () => importModpackFlow(importBtn));
+
+    /** ★ 主页直达本项目的 GitHub 仓库（外链一律走主进程 shell:openExternal） */
+    const repoBtn = mount.querySelector('#home-repo');
+    if (repoBtn) {
+      repoBtn.addEventListener('click', async () => {
+        const r = await call('shell:openExternal', { url: 'https://github.com/ALLEN201123/qcl-pc' });
+        if (!r.ok) toast(r.error || '打开仓库失败', 'error', 5000);
+      });
+    }
 
     /**
      * 选整合包文件。

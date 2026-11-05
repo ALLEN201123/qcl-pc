@@ -451,7 +451,8 @@ export function wireLaunchWindowEvents(lw, instanceId, options = {}) {
     }
   });
   // ③ 游戏真正就绪：这才是关窗的唯一成功信号
-  offReady = on('launch:game-ready', (p) => {
+  // ★ async：要在收起窗口前查一次联机状态（terracotta:status）
+  offReady = on('launch:game-ready', async (p) => {
     if (!p || (p.id && p.id !== instanceId)) return;
     lw.clearLoadingWarning();
     if (typeof p.elapsedMs === 'number' && p.elapsedMs >= 0) {
@@ -477,7 +478,25 @@ export function wireLaunchWindowEvents(lw, instanceId, options = {}) {
      * 玩家可在「设置 → 游戏」里把「游戏启动后保持启动器在前台」勾上，就会跳过这一步。
      */
     const keepOpen = !!(state && state.settings && state.settings.game && state.settings.game.keepLauncherOpen);
-    if (!keepOpen) {
+    /**
+     * ★★★ 2026-11-05：联机进行中**绝不**隐藏启动器窗口。
+     *
+     * Terracotta 房间由启动器进程里的 daemon 托管，窗口收起虽然不会杀进程，
+     * 但玩家看不到房间状态、也没法「关闭房间 / 复制邀请码」；而且用户明确担心
+     * 「关闭启动器窗口之后联机可能会中断」。⇒ 只要联机在跑，就保持窗口在前台。
+     * 用主进程 terracotta:status 查（单例，最可靠），查不到就按未联机处理（不拦正常收起）。
+     */
+    let multiplayerActive = false;
+    try {
+      const st = await call('terracotta:status', {}, { optional: true });
+      if (st && st.ok && st.data && st.data.running) multiplayerActive = true;
+    } catch {
+      /* 查询失败当未联机，不影响正常启动 */
+    }
+    if (multiplayerActive) {
+      toast('联机进行中，启动器窗口会保持在前台（避免房间中断）', 'info', 5000);
+    }
+    if (!keepOpen && !multiplayerActive) {
       // 等启动窗口自己关掉（finishLaunch 有 1.2s 动画）再收起，避免用户看到"闪一下"
       setTimeout(() => {
         call('win:hide').catch(() => {

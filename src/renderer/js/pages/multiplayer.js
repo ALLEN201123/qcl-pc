@@ -17,12 +17,14 @@ import { html, setHTML, raw, toast, emptyState } from '../ui.js';
 import { call, on } from '../bridge.js';
 import { icon } from '../icons.js';
 
-/** 状态文案映射（照 HMCL 的 TerracottaState） */
+/** 状态文案映射（照 HMCL 的 TerracottaState，连字符已由主进程转成下划线） */
 const STATE_TEXT = {
   waiting: { text: '等待中', kind: 'idle' },
   host_scanning: { text: '正在扫描端口…', kind: 'busy' },
+  host_starting: { text: '正在建立房间…', kind: 'busy' },
   host_ok: { text: '房间已创建', kind: 'ok' },
   guest_connecting: { text: '正在连接房间…', kind: 'busy' },
+  guest_starting: { text: '正在建立连接…', kind: 'busy' },
   guest_ok: { text: '已连接', kind: 'ok' },
   exception: { text: '出错了', kind: 'error' },
   exited: { text: '已结束', kind: 'idle' }
@@ -152,10 +154,11 @@ function renderTerracotta(mount) {
           <div><div class="tool-card__title">怎么用</div></div>
         </div>
         <ol class="tool-hints">
-          <li>房主点「创建房间」拿到<b>邀请码</b>；同时进游戏开一个<b>对局域网开放</b>的世界。</li>
-          <li>访客点「加入房间」填邀请码，拿到 <span class="mono">host:port</span>。</li>
+          <li><b>房主</b>点「创建房间」拿到<b>邀请码</b>；同时进游戏开一个<b>对局域网开放</b>的世界。</li>
+          <li><b>访客</b>点「加入房间」填邀请码，拿到 <span class="mono">host:port</span>。</li>
           <li>访客在游戏里「多人游戏 → 直接连接」填那个地址，就能进房主的世界。</li>
-          <li>联机开着时不要关启动器；关闭房间点「结束联机」。</li>
+          <li><b>联机进行中，启动器窗口会一直保持在前台</b>：房间由启动器托管，收起窗口可能让联机中断，所以这时不会自动收起。</li>
+          <li>关闭房间点「结束联机」；结束后启动器才恢复正常行为。</li>
         </ol>
         <div class="tool-actions">
           <button class="btn btn--ghost btn--sm" id="mp-stop" type="button">结束联机</button>
