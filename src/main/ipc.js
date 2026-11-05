@@ -192,6 +192,9 @@ async function runInstall({ id, mcVersion, loader }) {
         instanceId: id,
         mcVersion,
         loader: loader || null,
+        // ★ 把设置传下去：OptiFine / Forge 安装器要用「设置 → Java」里指定的 Java，
+        //   没有它就只能靠自动探测（用户手填的 Java 路径会被忽略）。
+        settings: ctx.settings.get(),
         source: ctx.settings.value('downloader').source,
         threads: ctx.settings.value('downloader').threads,
         onProgress: progress,
@@ -203,7 +206,17 @@ async function runInstall({ id, mcVersion, loader }) {
       });
       progress({ phase: 'done', stage: '安装完成', current: 1, total: 1, done: true });
       ctx.log.write(`安装完成：${JSON.stringify(result || {})}`);
-      inst.update(h, id, { installedVersion: mcVersion, loader: loader || null });
+      /**
+       * ★★★ 这里**不能**再写 `{ installedVersion: mcVersion, loader }`！
+       *
+       * install() 内部已经把实例信息写对了：
+       *   · OptiFine ≤1.12.2（patch 模式）：installedVersion = `<mc>-OptiFine_<ver>`（带 tweakClass 的版本 JSON）
+       *   · OptiFine ≥1.13（mod 模式）：installedVersion 保持原来的 Forge 版本、notes 记一条
+       *   · ModLoader / Babric / Forge：各自有自己的 loader 元数据
+       * 以前这里无条件覆盖成 `mcVersion + 用户选的 loader`，会把上面这些覆盖掉 ——
+       * OptiFine 补丁模式会退化成启动原版，mod 模式会把 Forge 版本改回原版。
+       * ⇒ 只刷新界面（install() 已经落盘）。
+       */
       send('instances:changed', {});
     } catch (err) {
       const message = err && err.name === 'AbortError' ? '安装已取消' : `安装失败：${err?.message || err}`;

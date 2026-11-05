@@ -18,6 +18,10 @@
  *   · ModLoader **不用联网**：查本地版本表 core/modloaderversions.js
  *               （Risugami's ModLoader 是覆盖式注入 jar，没有「加载器版本」概念，
  *                所以 versions 恒为空、只告诉界面能不能装 + 标签）
+ *   · OptiFine  https://bmclapi2.bangbang93.com/optifine/<mc>
+ *               （BMCLAPI 镜像，免登录免验证码；返回 type/patch/filename。
+ *                版本串用 `HD_U_I6` 这种；预览版要过滤掉，界面上默认不选。
+ *                ≤1.12.2 走 Patcher 打补丁，≥1.13 放进 mods 需要 Forge）
  *   · Forge     https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json
  *               （里面是 `"1.20.1-latest": "47.4.28"` 这种键值，最准）
  *   · NeoForge  https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/maven-metadata.xml
@@ -31,6 +35,7 @@
 const http = require('./http');
 const babric = require('./babric');
 const modloaderversions = require('./modloaderversions');
+const optifine = require('./optifine');
 
 /** 统一 10 秒超时 + 1 次重试，超时别拖垮界面 */
 const T = { timeoutMs: 12000, retries: 1 };
@@ -185,13 +190,24 @@ function modloaderInfo(mcVersion) {
 }
 
 /**
+ * OptiFine：BMCLAPI 列表（已过滤预览版，新→旧）。
+ * 返回条目数组（含 label/version/mode），界面可直接渲染下拉框。
+ * @param {string} mcVersion
+ * @returns {Promise<Array<object>>}
+ */
+async function optifineEntries(mcVersion) {
+  return optifine.listStable(mcVersion, T);
+}
+
+/**
  * 查某个 MC 版本可用的加载器版本。
  *
  * @param {object} opts
  * @param {string} opts.mcVersion  例如 '1.20.1' / '26.3' / 'b1.7.3'
- * @param {string} [opts.loader]   只查一个（fabric/forge/neoforge/quilt/babric/modloader）
+ * @param {string} [opts.loader]   只查一个（fabric/forge/neoforge/quilt/babric/modloader/optifine）
  * @returns {Promise<Object<string, {versions:string[], latest:string|null, error:string|null}>>}
  *   modloader 额外带 `available`（能否装）与 `label`（'ModLoader b1.7.3'）
+ *   optifine  额外带 `mode`（'patch'|'mod'）、`labels`（version → 中文标签）、`items`（[{version,label,filename}]）
  */
 async function listLoaderVersions(opts = {}) {
   const mcVersion = String(opts.mcVersion || '').trim();
@@ -205,13 +221,52 @@ async function listLoaderVersions(opts = {}) {
     ['quilt', () => quiltVersions(mcVersion)],
     ['babric', () => babricVersions(mcVersion)],
     // ★ ModLoader 不需要联网，也不依赖 mcVersion（查不到就是 available:false）
-    ['modloader', null]
+    ['modloader', null],
+    // ★ OptiFine 要联网（BMCLAPI），且要过滤预览版 + 带中文标签
+    ['optifine', null]
   ];
 
   for (const [name, fn] of tasks) {
     if (only && only !== name) continue;
     if (name === 'modloader') {
       out.modloader = modloaderInfo(mcVersion);
+      continue;
+    }
+    if (name === 'optifine') {
+      const mode = mcVersion ? optifine.modeFor(mcVersion) : 'mod';
+      if (!mcVersion) {
+        out.optifine = { versions: [], latest: null, error: '缺少 MC 版本', mode, labels: {}, items: [] };
+        continue;
+      }
+      try {
+        const entries = await optifineEntries(mcVersion);
+        const labels = {};
+        for (const e of entries) labels[e.version] = e.label;
+        out.optifine = {
+          versions: entries.map((e) => e.version),
+          latest: entries.length ? entries[0].version : null,
+          error: null,
+          // 'patch' = ≤1.12.2 用 Patcher 打补丁；'mod' = ≥1.13 放进 mods（需要 Forge）
+          mode,
+          labels,
+          items: entries.map((e) => ({
+            version: e.version,
+            label: e.label,
+            filename: e.filename,
+            preview: false,
+            forge: e.forge,
+          })),
+        };
+      } catch (err) {
+        out.optifine = {
+          versions: [],
+          latest: null,
+          error: err?.message || String(err),
+          mode,
+          labels: {},
+          items: [],
+        };
+      }
       continue;
     }
     if (!mcVersion) {
@@ -240,4 +295,5 @@ module.exports = {
   quiltVersions,
   babricVersions,
   modloaderInfo,
+  optifineEntries,
 };

@@ -205,9 +205,41 @@ async function get(home, id) {
 }
 
 /** 新建实例。 */
+/**
+ * 实例名去重：同名时自动加 `-2` / `-3` …
+ *
+ * ★ 2026-11-05：用户反馈「不能自定义版本的名字，想装多个一样的版本就会重复」。
+ *   界面上已经给了「＋ 新建实例…」+ 名字输入框，这里再做一层兜底 ——
+ *   即使调用方连着传同一个名字（脚本、整合包导入、界面没刷新），也不会出现两个同名实例。
+ *   比较不区分大小写（`1.20.1` 和 `1.20.1 ` 看着一样，容易让玩家点错）。
+ *
+ * @param {string} home
+ * @param {string} wanted  想要的名字
+ * @param {string} [exceptId]  改名时排除自己
+ */
+async function uniqueName(home, wanted, exceptId) {
+  const want = String(wanted || '').trim() || '新实例';
+  const set = new Set();
+  try {
+    const all = await list(home);
+    for (const i of all) {
+      if (exceptId && i.id === exceptId) continue;
+      set.add(String(i.name || '').toLowerCase());
+    }
+  } catch {
+    /* 读不到索引就当没有重名 */
+  }
+  if (!set.has(want.toLowerCase())) return want;
+  for (let n = 2; n < 10000; n++) {
+    const cand = `${want}-${n}`;
+    if (!set.has(cand.toLowerCase())) return cand;
+  }
+  return `${want}-${Date.now()}`;
+}
+
 async function create(home, input) {
   const opts = input || {};
-  const name = String(opts.name || '').trim() || '新实例';
+  const name = await uniqueName(home, opts.name);
   const mcVersion = String(opts.mcVersion || '').trim();
 
   let id = opts.id ? paths.safeId(opts.id) : newId();
@@ -241,7 +273,8 @@ async function remove(home, id) {
 async function rename(home, id, name) {
   const instance = await get(home, id);
   if (!instance) throw new Error(`实例不存在：${id}`);
-  instance.name = String(name || '').trim() || instance.name;
+  // 改名也要去重，否则玩家可以把两个实例改成同名
+  instance.name = await uniqueName(home, String(name || '').trim() || instance.name, id);
   delete instance.dir;
   jsonstore.writeJson(paths.instanceJson(home, id), instance);
   return get(home, id);

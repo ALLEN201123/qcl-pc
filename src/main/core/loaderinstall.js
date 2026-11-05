@@ -106,12 +106,41 @@ async function downloadInstaller({ urls, dest, onLog = () => {}, onProgress = ()
 }
 
 /**
+ * ★★★ 官方安装器要求游戏目录里有 `launcher_profiles.json`，否则直接罢工：
+ *     `There is no Minecraft launcher profile in "<dir>", you need to run the launcher first!`
+ *     然后退出码 1、一个版本目录都不生成 —— 2026-11-05 用户装 Forge 26.3 就是这么失败的。
+ *
+ *   QCL 的实例目录是自己在 `instances/<id>/.minecraft` 建出来的，从来没有这个文件。
+ *   ⇒ 跑任何官方安装器（Forge / NeoForge）之前先补一个最小可用的。
+ *     已存在就不动（玩家可能自己改过）。
+ */
+function ensureLauncherProfiles(gameDir, onLog = () => {}) {
+  const file = path.join(gameDir, 'launcher_profiles.json');
+  if (fs.existsSync(file)) return false;
+  const body = {
+    profiles: {},
+    settings: { enableSnapshots: false, keepLauncherOpen: false },
+    version: 3
+  };
+  try {
+    fs.writeFileSync(file, JSON.stringify(body, null, 2), 'utf8');
+    onLog('已补 launcher_profiles.json（官方安装器必需，否则会报 “no launcher profile”）');
+    return true;
+  } catch (err) {
+    onLog(`警告：launcher_profiles.json 写入失败（安装器可能会拒绝安装）：${err?.message || err}`);
+    return false;
+  }
+}
+
+/**
  * 运行安装器。
  *
  * @returns {Promise<{code:number, output:string[]}>}
  */
 function runInstaller({ javaPath, jarPath, args, gameDir, onLog = () => {}, timeoutMs = 600000 }) {
   return new Promise((resolve, reject) => {
+    // ★ 必须补 launcher_profiles.json，否则 Forge/NeoForge 安装器直接退出码 1
+    ensureLauncherProfiles(gameDir, onLog);
     onLog(`运行安装器：java -jar ${path.basename(jarPath)} ${args.join(' ')} ${gameDir}`);
     const child = spawn(javaPath, ['-jar', jarPath, ...args, gameDir], {
       cwd: gameDir,

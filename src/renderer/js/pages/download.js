@@ -490,20 +490,43 @@ export const downloadPage = {
     }
 
     /* ---------------- 目标实例下拉 ---------------- */
+    /**
+     * ★ 2026-11-05：加「＋ 新建实例…」选项。
+     *
+     * 用户原话：「不能自定义版本的名字，假如玩家想要下载多个一样的版本就会重复」。
+     * 以前这里只能选已有实例（或一个都没有时隐式新建，名字固定是版本号），
+     * 想装第二份同版本游戏就没地方起名 —— 现在明确给一个「新建」入口，
+     * 选中后会在加载器弹窗里出现「实例名称」输入框，默认名字自动去重。
+     */
+    const NEW_INSTANCE = '__new__';
+
     function renderTargets() {
       const targetSel = toolbarEl.querySelector('#dl-target');
       if (!targetSel) return;
       const cur = currentInstance();
+      const newOpt = `<option value="${NEW_INSTANCE}">＋ 新建实例…</option>`;
       if (state.instances.length === 0) {
-        setHTML(targetSel, html`<option value="">（还没有实例，安装时会自动新建）</option>`);
+        setHTML(targetSel, html`${raw(newOpt)}`);
         return;
       }
       setHTML(
         targetSel,
-        html`${state.instances.map(
+        html`${raw(newOpt)}${state.instances.map(
           (i) => raw(`<option value="${i.id}"${cur && cur.id === i.id ? ' selected' : ''}>${i.name}</option>`)
         )}`
       );
+    }
+
+    /** 实例名去重：1.20.1 → 1.20.1-2 → 1.20.1-3 …（不区分大小写） */
+    function suggestInstanceName(base) {
+      const want = String(base || '').trim() || '新实例';
+      const taken = new Set((state.instances || []).map((i) => String(i.name || '').toLowerCase()));
+      if (!taken.has(want.toLowerCase())) return want;
+      for (let n = 2; n < 1000; n++) {
+        const cand = `${want}-${n}`;
+        if (!taken.has(cand.toLowerCase())) return cand;
+      }
+      return `${want}-${Date.now()}`;
     }
 
     /* ============================ 二级分页 ============================ */
@@ -1079,7 +1102,11 @@ export const downloadPage = {
       };
     }
 
-    function pickLoaderFor(versionId) {
+    function pickLoaderFor(versionId, opts) {
+      const o = opts || {};
+      const allowName = !!o.allowName;
+      const defaultName = String(o.defaultName || versionId || '新实例');
+      const targetName = String(o.targetName || '');
       return new Promise((resolve) => {
         const root = document.getElementById('modal-root');
         if (!root) {
@@ -1151,7 +1178,7 @@ export const downloadPage = {
             type: 'optifine',
             label: 'OptiFine',
             badge: '光影优化',
-            desc: '经典光影/优化模组。安装需要手动下载对应版本文件，启动器会给出指引。',
+            desc: '经典光影/优化。启动器会下载官方安装器并自动打补丁；1.13 及以后需要先装 Forge（OptiFine 变成 Forge 模组）。',
           },
         ];
 
@@ -1173,7 +1200,7 @@ export const downloadPage = {
             </div>
             <div class="loader-list">
               ${OPTIONS.map(
-                (o) => `<button class="loader-item ${o.opt ? 'loader-item--off' : ''}" type="button" data-loader="${o.type}">
+                (o) => `<div class="loader-item ${o.opt ? 'loader-item--off' : ''}" role="button" tabindex="0" data-loader="${o.type}">
                   <span class="loader-item__main">
                     <span class="loader-item__title">
                       ${escapeHtml(o.label)}
@@ -1185,16 +1212,48 @@ export const downloadPage = {
                     </span>
                     <span class="loader-item__desc">${escapeHtml(o.desc)}</span>
                   </span>
-                  <span class="loader-item__go">选择</span>
-                </button>`
+                  <span class="loader-item__side">
+                    ${
+                      o.type === 'vanilla'
+                        ? ''
+                        : `<label class="loader-item__selwrap" title="想装别的版本就自己挑">
+                             <span class="loader-item__sellabel">版本</span>
+                             <select class="select loader-item__sel" data-selver="${o.type}" hidden></select>
+                           </label>`
+                    }
+                    <span class="loader-item__go">选中</span>
+                  </span>
+                </div>`
               ).join('')}
             </div>
-            <div class="loader-hint">
-              ★ 加载器版本会由启动器自动挑最新稳定版，一般不用管。
+            <!-- ★ 兼容前置：选好加载器后出现（Fabric API / Sodium 这类，多数模组没它直接崩） -->
+            <div class="loader-compats" id="ld-compats" hidden>
+              <div class="loader-compats__title">顺便一起装（可选）</div>
+              <div class="loader-compats__list" id="ld-compats-list"></div>
+              <div class="loader-compats__hint">
+                这些是加载器的「前置 API」，大多数模组没有它会直接崩；默认勾上的建议留着。
+              </div>
             </div>
+            <div class="loader-hint">
+              ★ 加载器版本默认挑最新稳定版；想用旧版（比如整合包指定的那个）就在右边的下拉里自己选。
+            </div>
+            ${
+              allowName
+                ? `<div class="loader-name">
+                    <span class="loader-name__label">实例名称</span>
+                    <input class="input" id="ld-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"
+                           value="${escapeHtml(defaultName)}" placeholder="给这个实例起个名字" />
+                    <span class="loader-name__hint">同名会自动加编号；装完也能在「版本设置」里改</span>
+                  </div>`
+                : `<div class="loader-name__note">
+                    将安装到已有实例${targetName ? `「${escapeHtml(targetName)}」` : ''} ——
+                    想另外装一份同版本的，先在上面「安装到」里选「＋ 新建实例…」。
+                  </div>`
+            }
           </div>
           <div class="modal__foot">
             <button class="btn btn--ghost" data-act="cancel" type="button">取消</button>
+            <button class="btn btn--primary" data-act="go" id="ld-go" type="button" disabled>开始安装</button>
           </div>`;
         root.appendChild(modal);
 
@@ -1211,6 +1270,19 @@ export const downloadPage = {
           }
         };
         document.addEventListener('keydown', onKey, true);
+
+        /* 实例名称输入框：玩家改过之后就不再自动改名 */
+        const nameInput = modal.querySelector('#ld-name');
+        let nameTouched = false;
+        if (nameInput) {
+          nameInput.addEventListener('input', () => {
+            nameTouched = true;
+          });
+          // ★ preventScroll 必须有：直接 focus() 会把弹窗内容滚到底，
+          //   顶部「推荐说明」和加载器列表全被顶出去（截图里就露出来了）。
+          nameInput.focus({ preventScroll: true });
+          nameInput.select();
+        }
 
         /**
          * ★ 每个加载器列出该 Minecraft 版本能用的最新稳定版本号。
@@ -1237,6 +1309,7 @@ export const downloadPage = {
               quilt: 'Quilt',
               babric: 'Babric',
               modloader: 'ModLoader',
+              optifine: 'OptiFine',
             };
             el.textContent = `该版本没有 ${names[type] || '可用版本'}`;
             el.className = 'loader-item__ver is-none';
@@ -1312,6 +1385,33 @@ export const downloadPage = {
               } else {
                 verMap[type] = arr.length ? { latest: slot.latest || arr[0], total: arr.length } : null;
               }
+              /**
+               * ★ 玩家反馈：「这些模组加载器都不能自定义选择版本」。
+               *   以前只能装最新版 —— 现在把后端给的全部版本灌进右边的下拉，
+               *   默认选最新，玩家想装旧版（整合包指定的那个）自己挑。
+               */
+              const sel = modal.querySelector(`[data-selver="${type}"]`);
+              if (sel) {
+                if (arr.length) {
+                  sel.innerHTML = arr
+                    .slice(0, 500)
+                    .map(
+                      (v, i) =>
+                        `<option value="${escapeHtml(v)}">${escapeHtml(v)}${i === 0 ? '（最新）' : ''}</option>`
+                    )
+                    .join('');
+                  sel.hidden = false;
+                  sel.addEventListener('change', () => {
+                    const badge = modal.querySelector(`[data-ver="${type}"]`);
+                    if (badge) {
+                      badge.textContent = `已选 ${sel.value}`;
+                      badge.className = 'loader-item__ver is-ok';
+                    }
+                  });
+                } else {
+                  sel.hidden = true;
+                }
+              }
             })
             .catch(() => {
               verMap[type] = null;
@@ -1332,38 +1432,120 @@ export const downloadPage = {
         setRec(''); // 先清空，等查完再标
         OPTIONS.forEach((o) => {
           if (o.type === 'vanilla') return;
-          // OptiFine 没有公开版本 API，跳过查询
-          if (o.type === 'optifine') {
-            verMap[o.type] = null;
-            paintVer(o.type);
-            return;
-          }
           loadVer(o.type);
         });
 
-        modal.querySelectorAll('[data-loader]').forEach((btn) => {
-          btn.addEventListener('click', async () => {
-            const type = btn.getAttribute('data-loader');
-            if (type === 'vanilla') {
-              finish({ type: 'vanilla' });
-              return;
+        /** 当前选中的加载器（点行 = 选中，底部「开始安装」才提交） */
+        let picked = null;
+
+        /** 按选中的加载器渲染「顺便一起装」的前置 API 勾选 */
+        const renderCompats = (type) => {
+          const wrap = modal.querySelector('#ld-compats');
+          const list = modal.querySelector('#ld-compats-list');
+          if (!wrap || !list) return;
+          const items = COMPAT_MODS[type] || [];
+          if (!items.length) {
+            wrap.hidden = true;
+            list.innerHTML = '';
+            return;
+          }
+          wrap.hidden = false;
+          list.innerHTML = items
+            .map(
+              (it) => `<label class="compat">
+                <input type="checkbox" data-compat="${escapeHtml(it.slug)}" ${it.on ? 'checked' : ''} />
+                <span class="compat__name">${escapeHtml(it.name)}</span>
+                <span class="compat__desc">${escapeHtml(it.desc)}</span>
+              </label>`
+            )
+            .join('');
+        };
+
+        modal.querySelectorAll('[data-loader]').forEach((row) => {
+          const type0 = row.getAttribute('data-loader');
+          // 行里的小下拉（加载器版本）不参与「选择」点击
+          const innerSel = modal.querySelector(`[data-selver="${type0}"]`);
+          if (innerSel) {
+            ['click', 'mousedown'].forEach((ev) =>
+              innerSel.addEventListener(ev, (e) => e.stopPropagation())
+            );
+          }
+          row.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              row.click();
             }
-            // 还在查版本就等一下，别让玩家选了个没有版本号的加载器
+          });
+          /**
+           * ★ 点一行 = **选中**它（不再立刻关窗），然后底部「开始安装」才提交。
+           *   这样才有地方放下「加载器版本」「兼容前置（Fabric API）」「实例名称」。
+           */
+          row.addEventListener('click', async () => {
+            const type = row.getAttribute('data-loader');
+            if (row.classList.contains('loader-item--off')) return;
+            picked = type;
+
+            // 高亮
+            modal.querySelectorAll('[data-loader]').forEach((r) => {
+              r.classList.toggle('is-picked', r === row);
+            });
+            const goBtn = modal.querySelector('#ld-go');
+            if (goBtn) goBtn.disabled = false;
+
+            // 玩家还没自己改过名字 → 按选中的加载器更新默认名（26.3 → 26.3 Fabric）
+            if (nameInput && !nameTouched) {
+              nameInput.value = suggestInstanceName(instanceNameFor(versionId, type));
+            }
+            // 兼容前置列表
+            renderCompats(type);
+
+            // 版本还没查完就等一会儿（只影响提示，不影响提交）
             if (verWait[type]) {
-              btn.classList.add('is-busy');
+              row.classList.add('is-busy');
               try {
                 await verWait[type];
               } catch (e) {
-                /* 查询失败也用 undefined 继续，后端会自己挑 */
+                /* 查询失败也用最新兜底 */
               }
-              btn.classList.remove('is-busy');
+              row.classList.remove('is-busy');
             }
-            const info = verMap[type];
-            // ModLoader 没有「加载器版本」这个概念（它自己就一个包），只回类型
-            const ver = type === 'modloader' ? undefined : (info && info.latest) || undefined;
-            finish({ type, version: ver });
+            renderCompats(type);
           });
         });
+
+        /** 底部「开始安装」：把选中的加载器 / 版本 / 名字 / 兼容前置一起交出去 */
+        const submit = () => {
+          const type = picked || 'vanilla';
+          let ver;
+          if (type !== 'vanilla' && type !== 'modloader') {
+            const selEl = modal.querySelector(`[data-selver="${type}"]`);
+            const chosenVer = selEl && !selEl.hidden && selEl.value ? String(selEl.value) : '';
+            const info = verMap[type];
+            ver = chosenVer || (info && info.latest) || undefined;
+          }
+          const companions = Array.from(modal.querySelectorAll('input[data-compat]:checked')).map((x) =>
+            x.getAttribute('data-compat')
+          );
+          finish({
+            type,
+            version: ver,
+            companions,
+            name: allowName ? String(nameInput ? nameInput.value : defaultName).trim() || defaultName : undefined,
+          });
+        };
+
+        const goBtn = modal.querySelector('#ld-go');
+        if (goBtn) goBtn.addEventListener('click', submit);
+        // 默认选中推荐项（推荐的那个加载器先帮玩家选上，免得他以为必须点）
+        setTimeout(() => {
+          const recRow = modal.querySelector(`[data-loader="${REC.primary}"]`);
+          if (recRow && !recRow.classList.contains('loader-item--off')) recRow.click();
+          else {
+            const fab = modal.querySelector('[data-loader="vanilla"]');
+            if (fab) fab.click();
+          }
+        }, 60);
+
         modal.querySelector('[data-close]').addEventListener('click', () => finish(null));
         modal.querySelector('[data-act="cancel"]').addEventListener('click', () => finish(null));
         modal.onmousedown = (e) => {
@@ -1372,12 +1554,100 @@ export const downloadPage = {
       });
     }
 
+    /**
+     * 实例默认名：`26.3`（原版）/ `26.3 Fabric`（选了加载器）—— 用户明确要求这个格式。
+     */
+    const LOADER_LABEL = {
+      fabric: 'Fabric',
+      forge: 'Forge',
+      neoforge: 'NeoForge',
+      quilt: 'Quilt',
+      modloader: 'ModLoader',
+      babric: 'Babric',
+      optifine: 'OptiFine',
+    };
+    function instanceNameFor(versionId, type) {
+      const label = LOADER_LABEL[type] || '';
+      return label ? `${versionId} ${label}` : String(versionId || '新实例');
+    }
+
+    /** 各加载器「顺手一起装」的前置 API（Modrinth slug） */
+    const COMPAT_MODS = {
+      fabric: [
+        { slug: 'fabric-api', name: 'Fabric API', desc: '绝大多数 Fabric 模组的前置，不装会直接崩', on: true },
+        { slug: 'sodium', name: 'Sodium', desc: '大幅提升帧率（只装优化本体）', on: false },
+      ],
+      quilt: [
+        { slug: 'qsl', name: 'Quilted Fabric API', desc: 'Quilt 版 Fabric API，Fabric 模组大多能用', on: true },
+        { slug: 'sodium', name: 'Sodium', desc: '大幅提升帧率', on: false },
+      ],
+      neoforge: [
+        { slug: 'sinytra-connector', name: 'Sinytra Connector', desc: '让 NeoForge 也能跑 Fabric 模组（可选）', on: false },
+      ],
+    };
+
+    /**
+     * 装完游戏后，把玩家勾的「兼容前置」也放进这个实例的 mods/。
+     * 走 Modrinth：content:versions 找适配 (mcVersion, loader) 的最新版 → content:download 落盘。
+     * 失败只提示、不打断安装。
+     */
+    async function installCompanionMods(targetId, mcVersion, loaderType, slugs) {
+      const list = Array.isArray(slugs) ? slugs.filter(Boolean) : [];
+      if (!targetId || !list.length) return;
+      const done = [];
+      const failed = [];
+      for (const slug of list) {
+        try {
+          const v = await call(
+            'content:versions',
+            { id: slug, mcVersion: mcVersion || '', loader: loaderType || '', source: 'modrinth' },
+            { optional: true }
+          );
+          const versions = v && v.ok && v.data ? asList(v.data).map(normVersion).filter(Boolean) : [];
+          if (!versions.length) {
+            failed.push(`${slug}（没有适配 ${mcVersion} 的版本）`);
+            continue;
+          }
+          const ver = versions[0];
+          const r = await call(
+            'content:download',
+            {
+              id: slug,
+              versionId: ver.id,
+              instId: targetId,
+              projectType: 'mod',
+              source: 'modrinth',
+            },
+            { optional: true }
+          );
+          if (r && r.ok && r.data) done.push(ver.name && ver.name !== slug ? `${slug} ${ver.versionNumber || ''}`.trim() : slug);
+          else failed.push(`${slug}（${(r && r.error) || '下载失败'}）`);
+        } catch (e) {
+          failed.push(`${slug}（${(e && e.message) || '异常'}）`);
+        }
+      }
+      if (done.length) toast(`已顺便装上前置：${done.join('、')}`, 'ok', 4200);
+      if (failed.length) toast(`这些前置没装上：${failed.join('；')}`, 'warn', 7000);
+    }
+
     async function installGameVersion(versionId) {
       /**
-       * ★ 先让玩家选加载器（原版 / Fabric / Forge / NeoForge / …）。
-       *   以前直接用工具栏的值（默认 vanilla），点安装就装原版 —— 用户明确反对。
+       * ★ 先算清楚「这次是装进哪个实例」：
+       *   · 「安装到」下拉选了「＋ 新建实例…」（或一个实例都没有）→ 新建，弹窗里给名字输入框
+       *   · 选了某个已有实例 → 直接装进去，弹窗里只提示一句（想另装一份就改选「新建」）
        */
-      const chosen = await pickLoaderFor(versionId);
+      const targetSel = toolbarEl.querySelector('#dl-target');
+      const targetVal = (targetSel && targetSel.value) || '';
+      const wantNew = !targetVal || targetVal === NEW_INSTANCE;
+      const existingId = wantNew ? '' : targetVal;
+      const existingInst = existingId ? (state.instances || []).find((x) => x.id === existingId) : null;
+      const existingName = (existingInst && existingInst.name) || existingId;
+
+      const chosen = await pickLoaderFor(versionId, {
+        allowName: wantNew,
+        defaultName: wantNew ? suggestInstanceName(instanceNameFor(versionId, '')) : '',
+        targetName: wantNew ? '' : existingName,
+      });
       if (!chosen) return; // 玩家取消
 
       // 玩家在弹窗里看到的加载器版本号，原样交给后端（没查到就不传，后端自己挑最新）
@@ -1386,12 +1656,12 @@ export const downloadPage = {
           ? { type: chosen.type, ...(chosen.version ? { version: chosen.version } : {}) }
           : null;
 
-      const targetSel = toolbarEl.querySelector('#dl-target');
-      let targetId = (targetSel && targetSel.value) || (currentInstance() && currentInstance().id) || '';
+      let targetId = wantNew ? '' : existingId;
       let targetName = '';
       if (!targetId) {
-        // 还没有实例：先建一个（用版本号当实例名），再装
-        const instName = chosen.type === 'vanilla' ? versionId : `${versionId}-${chosen.type}`;
+        // 新建实例：名字用玩家在弹窗里填的（没填就退回自动建议的、已去重的那个）
+        const instName =
+          String(chosen.name || '').trim() || suggestInstanceName(instanceNameFor(versionId, chosen.type));
         const created = await call('instances:create', {
           name: instName,
           mcVersion: versionId,
@@ -1433,6 +1703,10 @@ export const downloadPage = {
       });
       renderTasks();
       toast(`已开始安装 ${versionId} → 「${targetName}」`, 'ok', 3200);
+      // ★ 玩家在弹窗里勾了「顺便一起装」的前置 API → 现在往这个实例的 mods/ 放
+      if (Array.isArray(chosen.companions) && chosen.companions.length) {
+        installCompanionMods(targetId, versionId, chosen.type, chosen.companions);
+      }
     }
 
     /** 内容项目安装：先选版本，再提交下载安装 */

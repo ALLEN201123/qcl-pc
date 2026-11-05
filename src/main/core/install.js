@@ -262,10 +262,18 @@ async function fetchLoaderProfile(mcVersion, loader, ctx) {
     return null;
   }
 
-  // ★ Forge / NeoForge / OptiFine / LiteLoader：不在这里处理 fetchLoaderProfile，
+  /**
+   * ★ OptiFine 也不生成 profile：它有两种装法（见 core/optifine.js）——
+   *   ≤1.12.2 用自带 Patcher 打补丁后自建版本 JSON；≥1.13 直接放进 mods（要 Forge）。
+   *   这里返回 null 表示「本次只装原版」，⑤.8 再单独装 OptiFine。
+   */
+  if (type === 'optifine') {
+    return null;
+  }
+
+  // ★ Forge / NeoForge / LiteLoader：不在这里处理 fetchLoaderProfile，
   //   它们需要「先装好原版客户端，再运行官方安装器改写 jar」。
   //   这条分支返回 null 表示「本次只装原版」，安装器在 ⑤.6 阶段单独跑（见下面）。
-  //   以前这里直接抛「暂不支持」，现在真的实现了。
   if (needsInstallerType(type)) {
     return null;
   }
@@ -290,9 +298,88 @@ function librarySourceFor(loaderType, source) {
   return String(loaderType || '').toLowerCase() === 'babric' ? 'official' : source;
 }
 
-/** 需要运行官方安装器的加载器 */
+/**
+ * 需要运行官方安装器的加载器。
+ * ★ OptiFine 不在里面：它有自己的两条路线（Patcher / mods），见 ⑤.8 与 core/optifine.js。
+ */
 function needsInstallerType(type) {
-  return ['forge', 'neoforge', 'optifine', 'liteloader'].includes(String(type || '').toLowerCase());
+  return ['forge', 'neoforge', 'liteloader'].includes(String(type || '').toLowerCase());
+}
+
+/**
+ * 计算安装完成后要写进 instance.json 的字段。
+ *
+ * 抽成独立函数有几个原因：
+ *   · OptiFine 的两种模式对 `installedVersion` / `loader` 的处理**完全不同**，写错就启动不了；
+ *   · 这里有个历史坑：ipc.js 曾经在 install() 返回后又无条件覆盖成
+ *     `{ installedVersion: mcVersion, loader: 用户选的 }`，把 OptiFine 打补丁后的版本 id 冲掉；
+ *   · 抽出来后可以单测（build/verify-optifine.js 直接断言三种情形）。
+ *
+ * 规则：
+ *   · ModLoader：loader = {type:'modloader', version:<mcVersion>}，installedVersion = targetId
+ *   · OptiFine patch 模式（≤1.12.2）：installedVersion = 生成的 `<mc>-OptiFine_<ver>`，
+ *     loader = {type:'optifine', version:<ver>}
+ *   · OptiFine mod 模式（≥1.13）：**installedVersion 保持原值**（不能改掉 Forge 的版本），
+ *     loader 保持 forge，只往 notes 追加一行「已放入 mods/」
+ *   · 其它加载器：沿用原来的逻辑（用户选的类型 / profile 来源 / vanilla）
+ *
+ * @param {object} params
+ * @returns {object} 可直接交给 instances.update() 的 patch
+ */
+function buildInstancePatch(params) {
+  const p = params || {};
+  const loaderType = String(p.loaderType || '').toLowerCase();
+  const optifineResult = p.optifineResult || null;
+  const mcVersion = String(p.mcVersion || '');
+  const targetId = String(p.targetId || mcVersion);
+  const instance = p.instance || {};
+  const optsLoader = p.optsLoader || null;
+  const patchMode = !!(optifineResult && optifineResult.mode === 'patch');
+  const modMode = !!(optifineResult && optifineResult.mode === 'mod');
+
+  let loader;
+  if (loaderType === 'modloader') {
+    loader = { type: 'modloader', version: mcVersion };
+  } else if (patchMode) {
+    loader = { type: 'optifine', version: String(optifineResult.version || '') };
+  } else if (modMode) {
+    // 模式 B：必须已经装了 Forge，loader 保持 forge（版本用实例里记的）
+    const current = instance.loader || null;
+    loader = current && current.type === 'forge'
+      ? { type: 'forge', version: String(current.version || '') }
+      : { type: 'forge', version: '' };
+  } else if (optsLoader && optsLoader.type && optsLoader.type !== 'vanilla') {
+    loader = { type: optsLoader.type, version: optsLoader.version || '' };
+  } else if (p.loaderProfile) {
+    loader = { type: (p.loaderInfo && p.loaderInfo.source) || 'vanilla', version: '' };
+  } else {
+    loader = { type: 'vanilla', version: '' };
+  }
+
+  let installedVersion;
+  if (modMode) {
+    // ★ 保留原来的 installedVersion（Forge / 已装版本），绝不覆盖成 mcVersion
+    installedVersion = instance.installedVersion || targetId;
+  } else if (patchMode) {
+    installedVersion = optifineResult.versionId;
+  } else {
+    installedVersion = targetId;
+  }
+
+  const patch = {
+    installedVersion,
+    mcVersion,
+    loader,
+    // ★ 远古版本 / 装了 ModLoader 的版本自动关掉完整性检查（只影响这一个实例）
+    notCheckGameFiles: p.isLegacyInstall || loaderType === 'modloader' ? true : undefined,
+    chinesePack: p.chinesePackInfo || undefined,
+  };
+  if (modMode) {
+    const line = `OptiFine ${optifineResult.version} 已放入 mods/（1.13+ 需要 Forge 启动）`;
+    const currentNotes = String(instance.notes || '').trim();
+    patch.notes = currentNotes ? `${currentNotes}\n${line}` : line;
+  }
+  return patch;
 }
 
 async function fetchJsonWithFallback(urls, ctx, what) {
@@ -856,6 +943,8 @@ async function install(params) {
   let loaderManualHint = null;
   /** ModLoader 注入的 class 数（0 = 没装 / 未执行） */
   let modloaderInjected = 0;
+  /** OptiFine 安装结果（null = 没选 OptiFine / 未执行） */
+  let optifineResult = null;
   const loaderType = opts.loader && opts.loader.type ? String(opts.loader.type).toLowerCase() : '';
   if (needsInstallerType(loaderType) && opts.loader) {
     // 安装器要跑 java -jar，先挑一个可用的 Java（优先设置里指定的，其次自动检测）
@@ -969,6 +1058,61 @@ async function install(params) {
     }
   }
 
+  /**
+   * ── ⑤.8 OptiFine（高清修复）──
+   *
+   * ★ 两种装法（照 HMCL OptiFineInstallTask，见 core/optifine.js）：
+   *   · MC ≤ 1.12.2：用安装器自带的 Patcher 无界面打补丁 → 生成 inheritsFrom 原版的版本 JSON；
+   *   · MC ≥ 1.13：OptiFine 是 Forge 模组，直接放进 mods/（**必须先有 Forge**，否则报中文错误）。
+   *
+   * 排在原版安装、中文补丁、ModLoader 之后（Patcher 需要真实的原版 jar）。
+   * 失败要如实报错（原版已装好、仍可启动），绝不假装装好了。
+   */
+  if (loaderType === 'optifine') {
+    tracker.beginPhase('optifine', '安装 OptiFine', 1, 0);
+    try {
+      const optifine = require('./optifine');
+      // 设置里指定了 Java 就优先用它（Patcher 要跑 java）
+      let javaForOptifine = null;
+      try {
+        const wanted = opts.settings && opts.settings.javaPath ? opts.settings.javaPath : null;
+        if (wanted && fs.existsSync(wanted)) javaForOptifine = wanted;
+      } catch (_) {
+        javaForOptifine = null;
+      }
+      optifineResult = await optifine.install({
+        home,
+        instanceId,
+        mcVersion,
+        version: (opts.loader && opts.loader.version) || '',
+        instance,
+        javaPath: javaForOptifine,
+        signal,
+        onLog: (line) => log.log(line),
+        onProgress: (p) => {
+          const percent = p && Number.isFinite(p.percent) ? p.percent : 0;
+          tracker.progress(percent / 100, 1, 0, 0, (p && (p.file || p.stage)) || 'OptiFine');
+        },
+      });
+      tracker.endPhase(1);
+      installedLoaderVersion = optifineResult.version;
+      if (optifineResult.mode === 'patch') {
+        log.log(`OptiFine 已安装（补丁模式）：版本 ${optifineResult.versionId}，补丁 jar ${optifineResult.optifineJar}`);
+      } else {
+        log.log(`OptiFine 已放入 mods：${optifineResult.file}（1.13+ 需要 Forge 启动）`);
+      }
+    } catch (err) {
+      tracker.endPhase(1);
+      const msg = err && err.message ? err.message : String(err);
+      log.log(`OptiFine 安装失败：${msg}`);
+      throw new http.LauncherError(
+        `原版 ${mcVersion} 已装好，但 OptiFine 安装失败：${msg}。` +
+          `你可以先在「版本列表」里启动原版，或稍后重试。`,
+        { code: 'E_LOADER' }
+      );
+    }
+  }
+
   // ── ⑥ 写 instance.json ───────────────────────────────────────
   tracker.beginPhase('finish', '写入实例信息', 1, 0);
 
@@ -994,22 +1138,23 @@ async function install(params) {
     /* 中文包模块异常不影响安装 */
   }
 
-  const updated = await instancesModule.update(home, instanceId, {
-    installedVersion: targetId,
+  /**
+   * ★ OptiFine 的实例元数据要按两种模式分开写（patch 模式改 installedVersion，
+   *   mod 模式绝不能动原来的 Forge 版本）。具体规则见 buildInstancePatch()。
+   */
+  const instancePatch = buildInstancePatch({
+    loaderType,
+    optifineResult,
+    targetId,
+    instance,
     mcVersion,
-    /**
-     * ★ ModLoader 的「加载器版本」就是它对应的 MC 版本（它没有独立版本号），
-     *   与安装结果约定一致：`{ type:'modloader', version:<mcVersion> }`。
-     */
-    loader: loaderType === 'modloader'
-      ? { type: 'modloader', version: mcVersion }
-      : (opts.loader && opts.loader.type && opts.loader.type !== 'vanilla'
-        ? { type: opts.loader.type, version: opts.loader.version || '' }
-        : (loaderProfile ? { type: loaderInfo.source, version: '' } : { type: 'vanilla', version: '' })),
-    // ★ 远古版本 / 装了 ModLoader 的版本自动关掉完整性检查（只影响这一个实例）
-    notCheckGameFiles: isLegacyInstall || loaderType === 'modloader' ? true : undefined,
-    chinesePack: chinesePackInfo || undefined,
+    isLegacyInstall,
+    loaderProfile,
+    loaderInfo,
+    optsLoader: opts.loader,
+    chinesePackInfo,
   });
+  const updated = await instancesModule.update(home, instanceId, instancePatch);
   tracker.endPhase(1);
 
   const bytes = tracker.state.bytes;
@@ -1042,6 +1187,7 @@ module.exports = {
   // 供 build/verify-modloader-babric.js 等测试脚本直接验证（不对外暴露给渲染层）
   fetchLoaderProfile,
   librarySourceFor,
+  buildInstancePatch,
   tweakClassFor,
   launchWrapperVersionFor,
   legacyTypeFor,
