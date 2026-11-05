@@ -503,8 +503,17 @@ export const downloadPage = {
     function renderTargets() {
       const targetSel = toolbarEl.querySelector('#dl-target');
       if (!targetSel) return;
-      const cur = currentInstance();
-      const newOpt = `<option value="${NEW_INSTANCE}">＋ 新建实例…</option>`;
+      /**
+       * ★★★ 默认选「＋ 新建实例…」（2026-11-05 用户骂醒的一条）。
+       *
+       * 以前这里默认选中「当前实例」，于是玩家在下载页点某个版本的「安装」，
+       * 默认是**装进当前那个实例**（比如 26.3），而不是新建一个 1.20.1 的实例 ——
+       * 玩家看到的行为就是「我装 1.20.1，结果没多出一个版本」。
+       *
+       * 现在默认新建：装一个游戏版本 = 多一个版本，名字在弹窗里可以改
+       * （默认「1.20.1」/「1.20.1 Fabric」）。想装进已有实例才手动去下拉里选。
+       */
+      const newOpt = `<option value="${NEW_INSTANCE}" selected>＋ 新建实例…</option>`;
       if (state.instances.length === 0) {
         setHTML(targetSel, html`${raw(newOpt)}`);
         return;
@@ -512,7 +521,7 @@ export const downloadPage = {
       setHTML(
         targetSel,
         html`${raw(newOpt)}${state.instances.map(
-          (i) => raw(`<option value="${i.id}"${cur && cur.id === i.id ? ' selected' : ''}>${i.name}</option>`)
+          (i) => raw(`<option value="${i.id}">${i.name}</option>`)
         )}`
       );
     }
@@ -1193,6 +1202,17 @@ export const downloadPage = {
             <button class="winbtn" data-close type="button" title="关闭（Esc）">${icon('close', 14)}</button>
           </div>
           <div class="modal__body">
+            <!-- ★ 这个名字就是「装完之后这个版本在版本列表里叫什么」，放在最上面，一眼就能看到 -->
+            <div class="loader-name loader-name--top">
+              <span class="loader-name__label">这个版本的名称</span>
+              <input class="input" id="ld-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"
+                     value="${escapeHtml(defaultName)}" placeholder="给这个版本起个名字" />
+              <span class="loader-name__hint">${
+                allowName
+                  ? '装完后在「版本列表」里显示这个名字；重名会自动加编号'
+                  : `当前装到已有实例「${escapeHtml(targetName || '')}」；把名字改成别的 = 另建一个版本，原来的不动`
+              }</span>
+            </div>
             <div class="loader-intro">
               选一个<strong>模组加载器</strong>。<br />
               <span class="loader-intro__rec" data-rec-why>${escapeHtml(REC.why)}</span>
@@ -1249,16 +1269,6 @@ export const downloadPage = {
             </div>
             <div class="loader-hint">
               ★ 加载器版本默认挑最新稳定版；想用旧版（比如整合包指定的那个）就在右边的下拉里自己选。
-            </div>
-            <div class="loader-name">
-              <span class="loader-name__label">实例名称</span>
-              <input class="input" id="ld-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"
-                     value="${escapeHtml(defaultName)}" placeholder="给这个实例起个名字" />
-              <span class="loader-name__hint">${
-                allowName
-                  ? '同名会自动加编号；装完也能在「版本设置」里改'
-                  : `当前装到已有实例「${escapeHtml(targetName || '')}」；改个名字就会新建一个实例`
-              }</span>
             </div>
           </div>
           <div class="modal__foot">
@@ -1613,14 +1623,15 @@ export const downloadPage = {
 
         const goBtn = modal.querySelector('#ld-go');
         if (goBtn) goBtn.addEventListener('click', submit);
-        // 默认选中推荐项（推荐的那个加载器先帮玩家选上，免得他以为必须点）
+        /**
+         * ★ 默认选中「原版」（用户明确要求：不要自动帮我选 Fabric）。
+         *   以前这里会自动点推荐的那个加载器（1.14+ 就是 Fabric）——
+         *   用户以为是自己选了 Fabric，实际是启动器替他选的，很反感。
+         *   现在只高亮「推荐」标记，选中权完全交给玩家；不点就是原版。
+         */
         setTimeout(() => {
-          const recRow = modal.querySelector(`[data-loader="${REC.primary}"]`);
-          if (recRow && !recRow.classList.contains('loader-item--off')) recRow.click();
-          else {
-            const fab = modal.querySelector('[data-loader="vanilla"]');
-            if (fab) fab.click();
-          }
+          const vanillaRow = modal.querySelector('[data-loader="vanilla"]');
+          if (vanillaRow && !vanillaRow.classList.contains('loader-item--off')) vanillaRow.click();
         }, 60);
 
         modal.querySelector('[data-close]').addEventListener('click', () => finish(null));

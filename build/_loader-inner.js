@@ -340,9 +340,14 @@ app.whenReady().then(async () => {
         return {value:i.value, placeholder:i.placeholder, focused:(document.activeElement===i)};})()`
     );
     push('F2 弹窗里有「实例名称」输入框', !!(fOpen && fOpen.ok && nameField), { open: fOpen, name: nameField });
-    push('F3 默认名是「1.20.1 Fabric」格式', !!(nameField && /^1\.20\.1\s+Fabric$/.test(nameField.value)), nameField && nameField.value);
+    push('F3 默认名是「1.20.1」（默认原版，不自动选加载器）', !!(nameField && /^1\.20\.1$/.test(nameField.value)), nameField && nameField.value);
     push('F4 输入框自动获得焦点', !!(nameField && nameField.focused), nameField && nameField.focused);
     result.nameDefault = nameField && nameField.value;
+    // 点 Fabric 行 → 名字自动带上加载器
+    await js(`(function(){var r=document.querySelector('.modal--loader [data-loader="fabric"]'); if(r) r.click();})()`);
+    await sleep(600);
+    const nameAfter = await js(`(function(){var i=document.getElementById('ld-name'); return i?i.value:'';})()`);
+    push('F3b 点 Fabric 后名字自动变成「1.20.1 Fabric」', /^1\.20\.1\s+Fabric$/.test(nameAfter), nameAfter);
     try {
       const img = await win.webContents.capturePage();
       fs.writeFileSync(path.join(ROOT, 'docs', '_dlg-loader-v3.png'), img.toPNG());
@@ -407,7 +412,7 @@ app.whenReady().then(async () => {
                   hint:((document.querySelector('.loader-name__hint')||{}).textContent||'').trim()};})()`
       );
       push('H1 装到已有实例时名称框仍在，且填的是实例名', !!(existState.hasName && existState.value), existState);
-      push('H2 提示说明「改名就新建实例」', /新建/.test(existState.hint), existState.hint.slice(0, 40));
+      push('H2 提示说明「改名就另建版本」', /另建|新建/.test(existState.hint), existState.hint.slice(0, 40));
       rec.create = null;
       await js(
         `(function(){var i=document.getElementById('ld-name'); i.value='另装的一份'; i.dispatchEvent(new Event('input',{bubbles:true}));})()`

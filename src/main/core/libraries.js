@@ -223,7 +223,21 @@ function describeLibrary(lib, options) {
     artifactUrl,
     artifactSha1: (artifactInfo && artifactInfo.sha1) || null,
     artifactSize: artifactInfo && Number.isFinite(artifactInfo.size) ? artifactInfo.size : null,
-    hasArtifact: !!artifactInfo,
+    /**
+     * ★★★ 2026-11-05 修（用户：「你这三个模组加载器全是空壳」）。
+     *
+     * 以前是 `hasArtifact: !!artifactInfo` —— 只认 version json 里的 `downloads.artifact`。
+     * 但 **Fabric / Quilt 的 profile 里每个库只有 `name` + `url`（maven 仓库地址），
+     * 没有 `downloads.artifact`** ⇒ hasArtifact=false ⇒ 这些库**永远不会进 classpath**。
+     *
+     * 结果就是：Fabric 版本装出来了、jar 也下了，但启动时 classpath 里没有
+     * fabric-loader / sponge-mixin / asm，主类 `…KnotClient` 直接 ClassNotFound ——
+     * 玩家看到的就是「加载器是个空壳」。
+     *
+     * 现在只要不是 natives 且能拼出下载地址，就算「有 artifact」（照 HMCL / MultiMC 的做法：
+     * 有 maven `url` 就按坐标拼路径，不需要 downloads 字段）。
+     */
+    hasArtifact: !isNative && !!artifactUrl,
     // natives 库（要解压的 jar）
     nativePath: nativeRel,
     nativeUrl,

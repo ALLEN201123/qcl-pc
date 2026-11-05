@@ -2107,3 +2107,14 @@
   border: none;
   background: transparent;
 }
+/* 「这个版本的名称」放在弹窗最上面，要和下面的块区分开 */
+.loader-name--top {
+  margin-top: 0;
+  margin-bottom: 12px;
+  border-color: var(--accent);
+  background: var(--panel);
+}
+.loader-name--top .loader-name__label {
+  font-weight: 600;
+  color: var(--text);
+}
