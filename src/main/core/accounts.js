@@ -426,9 +426,38 @@ async function completeMicrosoftLogin(refreshToken, home) {
    *    { id:'cape', state:'ACTIVE', url:'…' }]
    * ⇒ 分别按 id 取，且都要求 state === 'ACTIVE'（卸下的披风不该显示）。
    */
+  /**
+   * ★★★ 2026-11-05 修（用户：「我的微软账号皮肤怎么又变回史蒂夫了」）。
+   *
+   * Mojang `/minecraft/profile` 现在返回的 `skins` 里，每项的 `id` 是**纹理哈希**，
+   * 不是字面量 "skin"；而且**披风已经挪到独立的 `capes` 数组**：
+   *
+   *   {
+   *     "skins": [{ "id":"<hash>", "state":"ACTIVE", "url":"http://textures…", "variant":"SLIM" }],
+   *     "capes": [{ "id":"<hash>", "state":"ACTIVE", "url":"http://textures…", "alias":"Migrator" }]
+   *   }
+   *
+   * 以前这里写的是 `skins.find(s => s.id === 'skin')` —— 旧格式才对得上，
+   * 新格式永远匹配不到 ⇒ activeSkin=null ⇒ avatar 空、skinModel 回落 classic ⇒
+   * **主界面人物、账号页头像全变成史蒂夫**（就是这个 bug）。
+   *
+   * 现在：
+   *   · skins：取 state=ACTIVE 的第一项（有 variant/url 就算）
+   *   · capes：优先看独立的 `capes` 数组，其次兼容老格式里 id 含 cape 的项
+   */
   const skins = Array.isArray(profile.skins) ? profile.skins : [];
-  const activeSkin = skins.find((s) => s && s.state === 'ACTIVE' && (s.id === 'skin' || !s.id)) || null;
-  const activeCape = skins.find((s) => s && s.state === 'ACTIVE' && s.id === 'cape') || null;
+  const capes = Array.isArray(profile.capes) ? profile.capes : [];
+  const activeSkin =
+    skins.find((s) => s && s.state === 'ACTIVE' && (s.variant || s.url)) ||
+    skins.find((s) => s && s.state === 'ACTIVE') ||
+    null;
+  const activeCape =
+    capes.find((c) => c && c.state === 'ACTIVE' && c.url) ||
+    skins.find((s) => s && s.state === 'ACTIVE' && /cape/i.test(String(s.id || ''))) ||
+    null;
+  const capUrl = (activeCape && activeCape.url) || null;
+  const skinUrl = (activeSkin && activeSkin.url) || null;
+  const variant = activeSkin && String(activeSkin.variant || '').toUpperCase() === 'SLIM' ? 'slim' : 'classic';
 
   return {
     uuid,
@@ -438,21 +467,38 @@ async function completeMicrosoftLogin(refreshToken, home) {
     refreshToken: newRefresh,
     // 微软令牌默认 24 小时有效，这里保守记 12 小时，过期前由界面提示重新登录
     expiresAt: Date.now() + 12 * 60 * 60 * 1000,
-    avatar: activeSkin ? activeSkin.url : null,
+    /** 头像/皮肤贴图地址（皮肤读取走主进程代理，绕过 CSP 的 http 限制） */
+    avatar: skinUrl,
+    skinUrl,
     /** 披风地址（没有披风时为 null） */
-    capeUrl: activeCape ? activeCape.url : null,
+    capeUrl: capUrl,
     /** 皮肤模型：SLIM = Alex 细手臂，其它当 classic */
-    skinModel: activeSkin && String(activeSkin.variant || '').toUpperCase() === 'SLIM' ? 'slim' : 'classic',
+    skinModel: variant,
   };
 }
 
 /** 用已保存的刷新令牌续期（启动前调用；失败就返回原记录，由界面提示重新登录）。 */
 async function refreshAccount(account, home) {
   if (!account || account.type !== 'microsoft' || !account.refreshToken) return account;
-  if (account.expiresAt && account.expiresAt - Date.now() > 10 * 60 * 1000) return account;
+  /**
+   * ★ 令牌还有效、**但皮肤信息丢了**（历史 bug 把 avatar/capeUrl 写成空，
+   *   表现为主界面人物和账号页头像变成史蒂夫）→ 也强制刷新一次把皮肤补回来。
+   */
+  const skinMissing = !account.avatar && !account.skinUrl;
+  if (!skinMissing && account.expiresAt && account.expiresAt - Date.now() > 10 * 60 * 1000) return account;
   try {
     const fresh = await completeMicrosoftLogin(account.refreshToken, home);
-    const merged = { ...account, ...fresh, uuid: account.uuid, name: fresh.name || account.name };
+    const merged = {
+      ...account,
+      ...fresh,
+      uuid: account.uuid,
+      name: fresh.name || account.name,
+      // ★ 新资料里没有皮肤时**保留旧的**，别用 null 把原来的覆盖掉
+      avatar: fresh.avatar || account.avatar || null,
+      skinUrl: fresh.skinUrl || account.skinUrl || fresh.avatar || account.avatar || null,
+      capeUrl: fresh.capeUrl || account.capeUrl || null,
+      skinModel: fresh.avatar || fresh.skinUrl ? fresh.skinModel : account.skinModel || 'classic',
+    };
     if (home) upsert(home, merged);
     return merged;
   } catch (_) {

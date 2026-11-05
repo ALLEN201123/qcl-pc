@@ -41,6 +41,8 @@ let panelEl = null;
 let stateMap = new Map(); // key -> 'pending' | 'active' | 'done'
 let startedAt = 0;
 let stageAt = new Map();
+/** 每个阶段的完成时刻（用来算「本阶段耗时」，而不是从启动到现在的总耗时） */
+let stageDoneAt = new Map();
 let lastLogLine = '';
 let hideTimer = null;
 /** 「还在加载」提醒的定时器（开窗后 90 秒还没等到 game-ready 就提示，但**绝不关窗**） */
@@ -55,6 +57,7 @@ export function openLaunchWindow({ instance, extra }) {
   startedAt = Date.now();
   stateMap = new Map(STAGES.map((s) => [s.key, 'pending']));
   stageAt = new Map();
+  stageDoneAt = new Map();
   lastLogLine = '';
   waitedMs = 0;
   if (warnTimer) {
@@ -201,7 +204,8 @@ function renderStages() {
   const now = Date.now();
   el.innerHTML = STAGES.map((s) => {
     const st = stateMap.get(s.key) || 'pending';
-    const t = stageAt.get(s.key);
+    // 第一个阶段（解析版本信息）可能没有显式 markStage，用 startedAt 兜底，否则那一行耗时永远空着
+    const t = stageAt.get(s.key) || (st === 'done' ? startedAt : 0);
     /**
      * ★ 2026-11-05 修（用户截图：所有步骤都显示 5.6s）。
      *
