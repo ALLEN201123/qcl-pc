@@ -9,6 +9,7 @@ import { call, on } from '../bridge.js';
 import { state, loadInstances, loadJava, saveSettings, notify } from '../store.js';
 import { html, raw, setHTML, toast, fmtDate, fmtDuration, fmtRelative, fmtBytes, loaderLabel, openModal } from '../ui.js';
 import { icon } from '../icons.js';
+import { PRESET_ICONS, instanceIconUrl } from '../instanceicon.js';
 
 const TABS = [
   { id: 'overview', label: '概览' },
@@ -102,17 +103,24 @@ function escapeHtml(s) {
 /**
  * 可选的实例图标（照安卓版 res/drawable/ic_mm_*.png 移植的 24 个 MultiMC 风格图标）。
  * 文件放在 src/renderer/assets/instance-icons/ 下，去掉 ic_mm_ 前缀当 id。
+ *
+ * ★ 2026-11-07：白名单与显示逻辑统一到 instanceicon.js，
+ *   以前这里和版本列表各存一份，容易漂移（而且版本列表根本不读 inst.icon）。
  */
-const INSTANCE_ICONS = [
-  'grass', 'dirt', 'stone', 'diamond', 'gold', 'iron', 'brick', 'planks',
-  'creeper', 'chicken', 'skeleton', 'steve', 'herobrine', 'squarecreeper',
-  'flame', 'tnt', 'enderpearl', 'netherstar', 'gear', 'magitech',
-  'meat', 'infinity', 'ftb_logo', 'ftb_glow'
-];
+const INSTANCE_ICONS = PRESET_ICONS;
 
 /** 图标 URL */
+/** 预置图标的 URL（点选网格里的每一张小图用） */
 function iconUrl(name) {
   return `./assets/instance-icons/${name}.png`;
+}
+
+/**
+ * 「当前图标」大图要显示的地址：优先自定义图片，其次预置，最后兜底。
+ * ★ 用共享的 instanceIconUrl，保证和版本列表 / 主页 / 右栏完全一致。
+ */
+function currentIconUrl(inst) {
+  return instanceIconUrl(inst);
 }
 
 export const versionSettingPage = {
@@ -207,26 +215,28 @@ export const versionSettingPage = {
      * 选中后写进 instance.json 的 `icon` 字段。
      */
     function drawIcon() {
-      const current = inst.icon || 'grass';
+      // ★ 「当前」用真实生效的图标（自定义图片优先），网格里高亮用预置名
+      const currentName = inst.icon || 'grass';
+      const isCustom = !!inst.iconUrl;
       setHTML(
         pane,
         html`<div class="vset-sec">
           <div class="vset-sec__title">实例图标</div>
           <div class="vset-sec__desc">
-            图标会显示在版本列表和主页的版本行上。选中即时保存。
+            图标会显示在版本列表、主页「我的实例」和右下角版本行上。选中即时保存。
           </div>
 
           <div class="icon-current">
-            <img class="icon-current__img" src="${iconUrl(current)}" alt="" />
+            <img class="icon-current__img" src="${currentIconUrl(inst)}" alt="" />
             <div class="icon-current__text">
-              <div class="icon-current__name">当前：${current}</div>
-              <div class="icon-current__hint">也可以用自己的图片（下面「自定义」）</div>
+              <div class="icon-current__name">当前：${isCustom ? '自定义图片' : currentName}</div>
+              <div class="icon-current__hint">${isCustom ? '正在使用你选的图片（下面的预置图标可覆盖它）' : '也可以用自己的图片（下面「自定义图标」）'}</div>
             </div>
           </div>
 
           <div class="icon-grid">
             ${INSTANCE_ICONS.map(
-              (n) => raw(`<button class="icon-grid__item ${n === current ? 'is-active' : ''}"
+              (n) => raw(`<button class="icon-grid__item ${!isCustom && n === currentName ? 'is-active' : ''}"
                 type="button" data-icon="${n}" title="${n}">
                 <img src="${iconUrl(n)}" alt="${n}" />
               </button>`)

@@ -1,0 +1,13 @@
+2026-11-06T23:43:16.377Z boot ROOT=--no-sandbox
+2026-11-06T23:43:16.440Z ready
+2026-11-06T23:43:16.447Z protocol ok
+2026-11-06T23:43:16.454Z BOOT FAIL Error: Cannot find module '--no-sandbox\src\main\settings.js'
+Require stack:
+- D:\HMCL-PE重构QCL计划\qcl-pc\build\_dbg.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1232:15)
+    at s._resolveFilename (node:electron/js2c/browser_init:2:124109)
+    at Module._load (node:internal/modules/cjs/loader:1058:27)
+    at c._load (node:electron/js2c/node_init:2:16955)
+    at Module.require (node:internal/modules/cjs/loader:1318:19)
+    at require (node:internal/modules/helpers:179:18)
+    at D:\HMCL-PE重构QCL计划\qcl-pc\build\_dbg.js:34:24

@@ -49,6 +49,32 @@ function registerAppProtocol() {
       if (rel.startsWith('/')) rel = rel.slice(1);
       if (!rel) rel = 'index.html';
 
+      /**
+       * ★★★ 2026-11-07：自定义实例图标专用通道。
+       *
+       * 实例图标存在 `<home>/icons/<id>.png`，不在 renderer 目录里，
+       * 而下面的目录穿越防护会把它挡掉（403）。所以单独开一条前缀：
+       *     qcl://app/__instanceicon__/<id>.png
+       * 只允许读 `<home>/icons/` 下的 png，且文件名必须是安全字符，
+       * 不放宽整体穿越防护、也不暴露任意路径。
+       */
+      if (rel.startsWith('__instanceicon__/')) {
+        const name = rel.slice('__instanceicon__/'.length);
+        if (!/^[A-Za-z0-9_-]+\.png$/i.test(name)) {
+          return new Response('403 非法图标名', { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        }
+        const homeDir = HOME_DIR || path.join(app.getPath('documents'), 'QCL');
+        const iconPath = path.normalize(path.join(homeDir, 'icons', name));
+        const iconRoot = path.normalize(path.join(homeDir, 'icons'));
+        if (!iconPath.startsWith(iconRoot + path.sep)) {
+          return new Response('403 禁止访问该路径', { status: 403, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        }
+        if (!fs.existsSync(iconPath)) {
+          return new Response('404 没有这个图标', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        }
+        return await net.fetch(pathToFileURL(iconPath).toString());
+      }
+
       const target = path.normalize(path.join(RENDERER_DIR, rel));
       // 目录穿越防护：必须仍在 renderer 目录内
       if (target !== RENDERER_DIR && !target.startsWith(RENDERER_DIR + path.sep)) {

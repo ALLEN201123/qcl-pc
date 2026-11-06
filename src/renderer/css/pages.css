@@ -1701,3 +1701,11 @@ button.dl__follow:hover {
   border-color: rgba(126, 198, 153, .45);
   background: rgba(126, 198, 153, .1);
 }
+/* 主页「我的实例」卡片的图标（改为真实图片后需要 img 样式） */
+.home-inst__icon img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  image-rendering: pixelated;
+  display: block;
+}

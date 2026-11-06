@@ -21,6 +21,23 @@ const paths = require('./paths');
 /** 合法的 loader 类型（契约 §3.3；babric / modloader 是远古版本的两种加载器）。 */
 const LOADER_TYPES = ['vanilla', 'forge', 'fabric', 'quilt', 'neoforge', 'optifine', 'liteloader', 'babric', 'modloader'];
 
+/**
+ * 把「自定义图标文件路径」转成渲染层 <img src> 能用的地址。
+ *
+ * 自定义图标存在 `<home>/icons/<id>.png`，不在 renderer 目录里，
+ * 所以走 index.js 里单开的 `qcl://app/__instanceicon__/<文件名>` 通道。
+ * 拿不到文件名（路径异常）时返回 null，让上层回落预置图标。
+ */
+function iconFileToUrl(file) {
+  try {
+    const name = path.basename(String(file || ''));
+    if (!/^[A-Za-z0-9_-]+\.png$/i.test(name)) return null;
+    return `qcl://app/__instanceicon__/${name}`;
+  } catch {
+    return null;
+  }
+}
+
 /** .minecraft 下要预先建好的子目录。 */
 const GAME_SUBDIRS = ['versions', 'libraries', 'assets', 'natives', 'mods', 'saves', 'resourcepacks', 'shaderpacks', 'config', 'logs'];
 
@@ -98,6 +115,19 @@ function hydrate(home, id, data) {
     id,
     name: record.name || id,
     icon: record.icon || 'grass',
+    /**
+     * ★★★ 2026-11-07 修（用户反馈「自定义实例图标与实际显示完全不准确，永远显示草方块」）。
+     *
+     * 以前 `iconFile` 只写进 instance.json，**hydrate 从来不读** ——
+     * 渲染层拿不到自定义图片路径，也没法把它变成 <img src> 能用的地址，
+     * 于是三处显示点（版本列表 / 主页 / 右栏版本行）全写死草方块。
+     *
+     * 这里同时给两个字段：
+     *   · iconFile —— 磁盘上的绝对路径（排查用）
+     *   · iconUrl  —— 可直接放进 <img src> 的 qcl:// 地址（渲染层用这个）
+     */
+    iconFile: record.iconFile || null,
+    iconUrl: record.iconFile ? iconFileToUrl(record.iconFile) : null,
     mcVersion: record.mcVersion || '',
     installedVersion: record.installedVersion || record.mcVersion || '',
     loader: loader && loader.type !== 'vanilla' ? loader : (loader || null),

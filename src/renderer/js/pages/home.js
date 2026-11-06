@@ -13,6 +13,7 @@ import { html, raw, setHTML, toast, promptDialog, openModal, confirmDialog } fro
 import { call } from '../bridge.js';
 import { icon } from '../icons.js';
 import * as router from '../router.js';
+import { instanceIconUrl, instanceIconAlt } from '../instanceicon.js';
 
 /* HTML 转义（主页「我的实例」卡片用） */
 function escapeHtml(s) {
@@ -422,7 +423,7 @@ export const homePage = {
           const active = cur && cur.id === i.id;
           const ver = i.installedVersion || i.mcVersion || '未指定版本';
           return raw(`<button class="home-inst ${active ? 'is-active' : ''}" type="button" data-inst="${escapeAttr(i.id)}" title="点击切换到该实例">
-            <span class="home-inst__icon">${escapeHtml((i.name || '?').slice(0, 1))}</span>
+            <span class="home-inst__icon"><img src="${escapeAttr(instanceIconUrl(i))}" alt="${escapeAttr(instanceIconAlt(i))}" /></span>
             <span class="home-inst__main">
               <span class="home-inst__name">${escapeHtml(i.name || i.id)}</span>
               <span class="home-inst__meta">${escapeHtml(ver)} · ${escapeHtml(loaderLabel(i))}</span>

@@ -12,12 +12,7 @@ import { icon } from '../icons.js';
 import * as router from '../router.js';
 import { launchCurrent } from '../shell.js';
 
-const ICON_FOR_TYPE = {
-  vanilla: './assets/icon/ic_grass.png',
-  grass: './assets/icon/ic_grass.png',
-  forge: './assets/icon/ic_grass.png',
-  fabric: './assets/icon/ic_grass.png',
-};
+import { instanceIconUrl, instanceIconAlt } from '../instanceicon.js';
 
 export const versionListPage = {
   id: 'versionlist',
@@ -100,7 +95,7 @@ export const versionListPage = {
             const localCount = inst.localVersionCount || 0;
             void localCount;
             return html`<div class="row ${active ? 'is-active' : ''}" data-id="${inst.id}">
-              <img class="row__icon" src="${ICON_FOR_TYPE[(inst.loader && inst.loader.type) || inst.icon] || './assets/icon/ic_grass.png'}" alt="" />
+              <img class="row__icon" src="${instanceIconUrl(inst)}" alt="${instanceIconAlt(inst)}" />
               <div class="row__main">
                 <div class="row__title">${inst.name}</div>
                 <div class="row__meta">

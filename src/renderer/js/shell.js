@@ -13,6 +13,7 @@ import { state, currentInstance, currentAccount, setCurrentInstance, notify } fr
 import * as router from './router.js';
 import { html, raw, setHTML, toast } from './ui.js';
 import { faceFromSkin, loadImage } from './avatar.js';
+import { instanceIconUrl, instanceIconAlt } from './instanceicon.js';
 
 /* ------------------------------ 左栏定义 ------------------------------ */
 
@@ -178,8 +179,7 @@ export function initRightPanel() {
         <div class="block" id="version-row" role="button" tabindex="0" title="点击进入版本列表">
           <img class="block__icon" id="version-icon" alt="" src="./assets/icon/ic_grass.png" />
           <span class="block__text" id="version-text">还没有实例</span>
-        </div>
-        <button class="block block--primary" id="launch-btn" type="button">启动游戏</button>
+        </div>        <button class="block block--primary" id="launch-btn" type="button">启动游戏</button>
       </div>`
   );
 
@@ -362,7 +362,9 @@ export function updateRightPanel() {
     } else {
       setHTML(textEl, '还没有实例');
     }
-    iconEl.src = './assets/icon/ic_grass.png';
+    // ★ 2026-11-07 修：以前写死草方块，玩家在版本设置里选的图标完全不生效
+    iconEl.src = instanceIconUrl(inst);
+    iconEl.alt = instanceIconAlt(inst);
   }
 
   if (launchEl) {
