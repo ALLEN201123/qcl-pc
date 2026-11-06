@@ -1692,6 +1692,36 @@ function registerIpc() {
 
 function initContext({ settings }) {
   ctx.settings = settings;
+  /**
+   * ★★★ 2026-11-06：在这里建立「程序目录 → 真实数据目录」的可见入口。
+   *
+   * 放在 initContext 里而不是 index.js，是因为：
+   *   · 所有入口（正式启动、开发启动、各验收脚本）都会调 initContext
+   *   · 放 index.js 时，测试脚本直接 require ipc.js 就绕过了 —— 实测踩到
+   * 幂等：已存在同名入口/文件夹时直接返回，不重复建。
+   * 失败只写日志，绝不拦启动。
+   */
+  try {
+    const home = settings && settings.value ? settings.value('home') : null;
+    if (home) {
+      const visibleLink = require('./core/visiblelink');
+      const r = visibleLink.ensureVisibleLink(home);
+      if (r && (r.created || r.guide)) {
+        ctx.log.open(home, 'visiblelink');
+        ctx.log.write(
+          r.created
+            ? `已在程序目录建立数据入口：${r.link} → ${home}`
+            : `程序目录数据入口建立失败，已写指路文件：${r.guide}`
+        );
+      }
+    }
+  } catch (err) {
+    try {
+      ctx.log.write(`建立程序目录数据入口异常（不影响使用）：${err?.message || err}`);
+    } catch {
+      /* 日志失败无所谓 */
+    }
+  }
 }
 
 module.exports = { registerIpc, initContext, ctx };

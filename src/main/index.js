@@ -225,6 +225,34 @@ if (!gotLock) {
       dialog.showErrorBox('QCL 无法创建数据目录', `路径：${settings.value('home')}\n${err.message}`);
     }
 
+    /**
+     * ★★★ 2026-11-06（用户反馈「打开程序目录看不到自己的实例」）。
+     *
+     * 装完之后 `Programs\QCL` 里只有 QCL.exe / resources / QCL-data，
+     * 玩家找不到 instances —— 以为数据丢了。真实数据在 `文档\QCL`。
+     * ⇒ 在程序目录里建一个目录联接（junction，**不需要管理员权限**）：
+     *      Programs\QCL\QCL数据  →  文档\QCL
+     * 玩家打开程序目录点进「QCL数据」就能看到 instances / accounts / meta。
+     * 失败只写日志，绝不拦启动；便携版（数据本就在程序目录）自动跳过。
+     */
+    try {
+      const visibleLink = require('./core/visiblelink');
+      visibleLink.ensureVisibleLink(settings.value('home'), {
+        log: (m) => {
+          // logger 实例要等 initContext 之后才有，这里直接追加到主目录日志
+          try {
+            const logFile = path.join(settings.value('home'), 'logs', 'latest.log');
+            fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${m}\n`, 'utf8');
+          } catch {
+            /* 日志失败无所谓 */
+          }
+          if (process.env.QCL_DEBUG) console.log('[QCL]', m);
+        },
+      });
+    } catch (err) {
+      if (process.env.QCL_DEBUG) console.warn('[QCL] 建立程序目录数据入口异常：', err && err.message);
+    }
+
     initContext({ settings });
 
     const win = createMainWindow({

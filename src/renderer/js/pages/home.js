@@ -14,6 +14,16 @@ import { call } from '../bridge.js';
 import { icon } from '../icons.js';
 import * as router from '../router.js';
 
+/* HTML 转义（主页「我的实例」卡片用） */
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+function escapeAttr(s) {
+  return escapeHtml(s).replace(/\s+/g, ' ').trim();
+}
+
 const LS_HIDDEN = 'qcl.announcement.hidden';
 
 function readHidden() {
@@ -60,6 +70,17 @@ export const homePage = {
             </div>
             <div class="skinview__hint" id="skin-hint">拖动旋转 · 滚轮缩放 · 双击复位</div>
           </div>
+        </div>
+        <!-- ★ 我的实例：玩家一进主页就能看到自己有哪些版本、当前用的是哪个 -->
+        <div class="home-instances" id="home-instances">
+          <div class="home-instances__head">
+            <span class="home-instances__title">我的实例</span>
+            <span class="home-instances__count" id="home-inst-count"></span>
+            <span class="grow"></span>
+            <button class="btn btn--ghost btn--sm" id="home-open-data" type="button">${raw(icon('folder', 13))}打开数据目录</button>
+            <button class="btn btn--ghost btn--sm" id="home-more-inst" type="button">管理实例</button>
+          </div>
+          <div class="home-instances__grid" id="home-inst-grid"></div>
         </div>
       </div>`
     );
@@ -359,6 +380,98 @@ export const homePage = {
         if (!r.ok) toast(r.error || '打开仓库失败', 'error', 5000);
       });
     }
+
+    /* ---------------- 我的实例（玩家一进主页就能看到自己的实例） ---------------- */
+    /**
+     * 用户反馈「打开程序目录看不到自己的实例」。
+     * 除了在程序目录建数据入口，主页也必须**直接列出实例** ——
+     * 否则玩家只能靠左栏「版本列表」自己找，很容易以为数据丢了。
+     */
+    const instGrid = mount.querySelector('#home-inst-grid');
+    const instCount = mount.querySelector('#home-inst-count');
+
+    /** 加载器中文名（与版本设置页保持一致） */
+    function loaderLabel(inst) {
+      const l = inst && inst.loader;
+      if (!l || !l.type || l.type === 'vanilla') return '原版';
+      const map = {
+        fabric: 'Fabric', forge: 'Forge', neoforge: 'NeoForge',
+        quilt: 'Quilt', modloader: 'ModLoader', babric: 'Babric', optifine: 'OptiFine',
+      };
+      const name = map[String(l.type).toLowerCase()] || String(l.type);
+      return l.version ? `${name} ${l.version}` : name;
+    }
+
+    function renderInstances() {
+      if (!instGrid) return;
+      const list = (state.instances || []).slice();
+      const cur = currentInstance();
+      if (instCount) instCount.textContent = list.length ? `（${list.length} 个）` : '';
+      if (!list.length) {
+        setHTML(
+          instGrid,
+          html`<div class="home-instances__empty">
+             还没有任何实例。去「下载」装一个游戏版本，或在上面导入整合包。
+           </div>`
+        );
+        return;
+      }
+      setHTML(
+        instGrid,
+        html`${list.map((i) => {
+          const active = cur && cur.id === i.id;
+          const ver = i.installedVersion || i.mcVersion || '未指定版本';
+          return raw(`<button class="home-inst ${active ? 'is-active' : ''}" type="button" data-inst="${escapeAttr(i.id)}" title="点击切换到该实例">
+            <span class="home-inst__icon">${escapeHtml((i.name || '?').slice(0, 1))}</span>
+            <span class="home-inst__main">
+              <span class="home-inst__name">${escapeHtml(i.name || i.id)}</span>
+              <span class="home-inst__meta">${escapeHtml(ver)} · ${escapeHtml(loaderLabel(i))}</span>
+            </span>
+            <span class="home-inst__badge">${active ? '当前' : '切换'}</span>
+          </button>`);
+        })}`
+      );
+      instGrid.querySelectorAll('[data-inst]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.getAttribute('data-inst');
+          const inst = (state.instances || []).find((x) => x.id === id);
+          if (!inst) return;
+          // ★ setCurrentInstance 收的是 **id 字符串**（不是对象），内部会写存储 + notify
+          setCurrentInstance(id);
+          renderInstances();
+          // 右栏「版本行 + 启动按钮」跟着换。
+          // 用动态 import 而不是顶层 import，避免 home ↔ shell 的模块循环依赖。
+          import('../shell.js')
+            .then((m) => {
+              if (typeof m.updateRightPanel === 'function') m.updateRightPanel();
+            })
+            .catch(() => {
+              /* 刷新失败不影响切换 */
+            });
+          toast(`已切换到「${inst.name || id}」`, 'ok', 2200);
+        });
+      });
+    }
+
+    if (instGrid) renderInstances();
+
+    // 「打开数据目录」：主进程 shell:openPath 打开真实主目录（不是程序目录）
+    const openDataBtn = mount.querySelector('#home-open-data');
+    if (openDataBtn) {
+      openDataBtn.addEventListener('click', async () => {
+        const h = state.settings && state.settings.home;
+        if (!h) {
+          toast('还没拿到数据目录路径', 'error', 4000);
+          return;
+        }
+        const r = await call('shell:openPath', { path: h });
+        if (!r.ok) toast(r.error || `打开失败：${h}`, 'error', 6000);
+      });
+    }
+
+    // 「管理实例」→ 版本列表页
+    const moreBtn = mount.querySelector('#home-more-inst');
+    if (moreBtn) moreBtn.addEventListener('click', () => router.navigate('versionlist'));
 
     /**
      * 选整合包文件。
