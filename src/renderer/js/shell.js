@@ -36,6 +36,9 @@ const NAV_ITEMS = [
   { id: 'versionlist', tip: '版本列表', kind: 'svg', glyph: 'versionlist' },
   { id: 'download', tip: '下载', kind: 'svg', glyph: 'download' },
   { id: 'tools', tip: '工具', kind: 'mask', glyph: 'lab' },
+  // ★ 百宝箱（照 PCL：今日人品 / 内存优化 / 清理垃圾 / 磁盘占用 / 回声洞 / 自定义下载）
+  //   图标用专属的 toolbox（宝箱造型），不再借用 star
+  { id: 'toolbox', tip: '百宝箱', kind: 'svg', glyph: 'toolbox' },
   { id: 'mods', tip: '模组管理', kind: 'svg', glyph: 'pack' },
   { id: 'multiplayer', tip: '多人联机', kind: 'svg', glyph: 'multiplayer' },
   { id: 'setting', tip: '设置', kind: 'svg', glyph: 'setting' },

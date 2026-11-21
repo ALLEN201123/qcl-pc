@@ -39,6 +39,8 @@ import { helpPage } from './pages/help.js';
 import { toolsPage } from './pages/tools.js';
 import { modsPage } from './pages/mods.js';
 import { multiplayerPage } from './pages/multiplayer.js';
+// ★ 百宝箱（照 PCL 的功能清单：今日人品 / 内存优化 / 清理垃圾 / 磁盘占用 / 回声洞 / 自定义下载）
+import { toolboxPage } from './pages/toolbox.js';
 
 /* ------------------------------ 页面注册 ------------------------------ */
 
@@ -77,6 +79,7 @@ const PAGES = [
   toolsPage,
   modsPage,
   multiplayerPage,
+  toolboxPage,
 ];
 
 function registerPages() {

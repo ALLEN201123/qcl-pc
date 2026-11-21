@@ -1230,6 +1230,194 @@ const handlers = {
     }
   },
 
+  // ---------- 百宝箱（Toolbox） ----------
+  /**
+   * 功能清单照 PCL 官方开源仓库（PageOtherTest.xaml.vb + ModEvent.vb）：
+   *   今日人品 / 内存优化 / 清理游戏垃圾 / 磁盘占用 / 回声洞 / 下载自定义文件。
+   *
+   * ★ 所有通道都以 `toolbox:` 开头 —— preload/index.js 的 INVOKE_RE 已同步放行。
+   * ★ 内存优化与垃圾扫描都是耗时操作，界面侧必须 await、不得阻塞其它交互。
+   */
+  'toolbox:jrrp': async ({ userName } = {}) => {
+    try {
+      return { ok: true, ...need('toolbox').jrrp(userName) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'toolbox:memoryOptimize': async () => {
+    try {
+      return { ok: true, ...(await need('toolbox').memoryOptimize()) };
+    } catch (err) {
+      return { ok: false, supported: process.platform === 'win32', freedMb: 0, error: err?.message || String(err) };
+    }
+  },
+  /** 扫描可清理的垃圾（只扫描，不删除） */
+  'toolbox:scanRubbish': async ({ instanceId } = {}) => {
+    try {
+      const instMod = need('instances');
+      const inst = instanceId ? await instMod.get(home(), instanceId) : null;
+      const gameRoot = path.join(inst ? inst.dir : home(), '.minecraft');
+      return { ok: true, ...need('toolbox').scanRubbish(gameRoot) };
+    } catch (err) {
+      return { ok: false, items: [], totalBytes: 0, totalCount: 0, error: err?.message || String(err) };
+    }
+  },
+  /**
+   * 删除扫描结果里的文件。**走回收站**（shell.trashItem），不直接删除，
+   * 给玩家后悔的机会；删之前再用主进程侧的白名单校验一遍路径。
+   */
+  'toolbox:cleanRubbish': async ({ instanceId, files } = {}) => {
+    try {
+      const instMod = need('instances');
+      const inst = instanceId ? await instMod.get(home(), instanceId) : null;
+      const gameRoot = path.join(inst ? inst.dir : home(), '.minecraft');
+      const tb = need('toolbox');
+      const { allow, blocked } = tb.filterDeletable(gameRoot, files);
+      let removed = 0;
+      let bytes = 0;
+      const failed = [];
+      for (const f of allow) {
+        let size = 0;
+        try {
+          size = fs.statSync(f).size;
+        } catch {
+          /* 已经不在了 */
+        }
+        try {
+          await shell.trashItem(f);
+          removed += 1;
+          bytes += size;
+        } catch (err) {
+          failed.push({ file: f, error: err?.message || String(err) });
+        }
+      }
+      return { ok: true, removed, bytes, blocked, failed };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'toolbox:diskUsage': async ({ instanceId } = {}) => {
+    try {
+      const instMod = need('instances');
+      const inst = instanceId ? await instMod.get(home(), instanceId) : null;
+      const gameRoot = path.join(inst ? inst.dir : home(), '.minecraft');
+      return { ok: true, ...need('toolbox').diskUsage(gameRoot) };
+    } catch (err) {
+      return { ok: false, dirs: [], total: { size: 0, files: 0 }, error: err?.message || String(err) };
+    }
+  },
+  'toolbox:cave': async () => {
+    try {
+      const tb = need('toolbox');
+      return { ok: true, cave: tb.getRandomCave(), hint: tb.getRandomHint() };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /**
+   * 下载自定义文件（对应 PCL 的 StartCustomDownload 三种参数形态）：
+   *   只给 url              → 文件名从 URL 推断
+   *   url + fileName        → 用给定文件名
+   *   url + fileName + folder → 再加保存目录
+   * 进度通过 task:progress 事件推送（payload.kind = 'toolbox-download'）。
+   */
+  'toolbox:download': async ({ url, fileName, folder } = {}) => {
+    try {
+      const tb = need('toolbox');
+      const httpMod = require('./core/http');
+      const target = String(url || '').trim();
+      if (!/^https?:\/\//i.test(target)) return { ok: false, error: '只支持 http/https 下载地址' };
+
+      const name = tb.safeFileName(fileName || tb.fileNameFromUrl(target));
+      const dir = String(folder || '').trim() || tb.defaultDownloadDir(home());
+      fs.mkdirSync(dir, { recursive: true });
+      const dest = path.join(dir, name);
+      if (!tb.isInside(dir, dest) && path.resolve(path.dirname(dest)) !== path.resolve(dir)) {
+        return { ok: false, error: '文件名非法，无法确定保存位置' };
+      }
+
+      const res = await httpMod.openStream(target, { timeoutMs: 60000 });
+      if (!res || !res.body) return { ok: false, error: '下载请求没有返回内容' };
+
+      const total = Number(res.headers && (res.headers.get ? res.headers.get('content-length') : 0)) || 0;
+      const started = Date.now();
+      let received = 0;
+      let lastEmit = 0;
+      const id = `toolbox-${Date.now()}`;
+      const emit = (phase, extra) => {
+        send('task:progress', {
+          kind: 'toolbox-download', id, phase,
+          done: received, total,
+          percent: total ? Math.round((received / total) * 1000) / 10 : null,
+          speed: Math.round(received / Math.max(0.001, (Date.now() - started) / 1000)),
+          name,
+          ...extra,
+        });
+      };
+
+      // ★ openStream 返回的是标准 Fetch Response，统一走 getReader() 读流
+      const reader = res.body.getReader();
+      const out = fs.createWriteStream(dest);
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.length;
+          if (!out.write(Buffer.from(value))) {
+            // 背压：等 drain 再继续，避免大文件把内存吃满
+            await new Promise((r) => out.once('drain', r));
+          }
+          const now = Date.now();
+          if (now - lastEmit > 300) {
+            lastEmit = now;
+            emit('download');
+          }
+        }
+        await new Promise((resolve, reject) => out.end((err) => (err ? reject(err) : resolve())));
+      } catch (err) {
+        try {
+          out.destroy();
+        } catch {
+          /* ignore */
+        }
+        throw err;
+      }
+
+      emit('done', { percent: 100 });
+      return { ok: true, path: dest, bytes: received, name, dir };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'toolbox:openDownloadDir': async ({ folder } = {}) => {
+    try {
+      const tb = need('toolbox');
+      const dir = String(folder || '').trim() || tb.defaultDownloadDir(home());
+      fs.mkdirSync(dir, { recursive: true });
+      const err = await shell.openPath(dir);
+      return err ? { ok: false, error: err } : { ok: true, dir };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 选一个保存目录（下载自定义文件用） */
+  'toolbox:pickFolder': async ({ current } = {}) => {
+    try {
+      const { dialog } = require('electron');
+      const win = getMainWindow();
+      const r = await dialog.showOpenDialog(win || undefined, {
+        title: '选择保存目录',
+        defaultPath: String(current || '').trim() || undefined,
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (r.canceled || !r.filePaths.length) return { ok: true, canceled: true };
+      return { ok: true, canceled: false, dir: r.filePaths[0] };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
   // ---------- 整合包 ----------
   /**
    * 契约（frontend-dev 按这个写界面）：

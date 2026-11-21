@@ -7,7 +7,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const INVOKE_RE = /^(app|win|settings|instances|versions|install|launch|accounts|java|log|shell|tools|mods|modpack|terracotta|skin|authlib|content|loader|worlds):[A-Za-z]+$/;
+const INVOKE_RE = /^(app|win|settings|instances|versions|install|launch|accounts|java|log|shell|tools|mods|modpack|terracotta|skin|authlib|content|loader|worlds|toolbox):[A-Za-z]+$/;
 const EVENT_RE = /^(task:progress|launch:log|launch:state|launch:stage|launch:game-ready|instances:changed|accounts:changed|settings:changed|java:changed|win:state|terracotta:state)$/;
 
 /** cb -> wrapper，用于 off 时精确移除 */

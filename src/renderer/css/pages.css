@@ -1709,3 +1709,124 @@ button.dl__follow:hover {
   image-rendering: pixelated;
   display: block;
 }
+/* ============================ 百宝箱（Toolbox） ============================ */
+.tbx-quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 12px;
+}
+.tbx-dim { color: var(--text-2); font-size: 11.5px; }
+.tbx-warn {
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--text);
+  background: rgba(255, 193, 7, .09);
+  border: 1px solid rgba(255, 193, 7, .35);
+  border-radius: 9px;
+  padding: 9px 11px;
+}
+.tbx-warn strong { color: #e0b04a; }
+
+/* 今日人品 */
+.tbx-jrrp__hint, .tbx-clean__hint {
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.tbx-jrrp__score { display: flex; align-items: baseline; gap: 6px; margin: 6px 0 4px; }
+.tbx-jrrp__num { font-size: 34px; font-weight: 700; color: var(--text); line-height: 1; }
+.tbx-jrrp__unit { font-size: 12px; color: var(--text-2); }
+.tbx-jrrp__bar {
+  height: 6px; border-radius: 999px; background: var(--panel-soft);
+  border: 1px solid var(--line); overflow: hidden; margin: 8px 0 10px;
+}
+.tbx-jrrp__fill {
+  height: 100%;
+  background: linear-gradient(90deg, #7ec699, #e0b04a);
+  transition: width .35s ease;
+}
+.tbx-jrrp__text { font-size: 12.5px; color: var(--text); line-height: 1.7; }
+.tbx-jrrp__meta { font-size: 11px; color: var(--text-2); margin-top: 6px; line-height: 1.6; }
+
+/* 内存优化 */
+.tbx-mem__running { font-size: 12px; color: var(--text-2); padding: 6px 0; }
+.tbx-mem__ok { font-size: 13px; color: var(--text); margin-top: 8px; }
+.tbx-mem__ok strong { color: #7ec699; font-size: 15px; }
+
+/* 清理垃圾 */
+.tbx-clean__sum { font-size: 12.5px; color: var(--text); margin: 4px 0 8px; }
+.tbx-clean__sum strong { color: #e0b04a; }
+.tbx-files {
+  list-style: none; margin: 0 0 10px; padding: 0;
+  max-height: 240px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel-soft);
+}
+.tbx-file {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 9px; font-size: 11.5px;
+  border-bottom: 1px solid var(--line);
+}
+.tbx-file:last-child { border-bottom: 0; }
+.tbx-file__name {
+  flex: 1 1 auto; min-width: 0; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left;
+}
+.tbx-file__tag {
+  flex: 0 0 auto; font-size: 10.5px; color: var(--text-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 6px;
+}
+.tbx-file__size { flex: 0 0 auto; color: var(--text-2); font-variant-numeric: tabular-nums; }
+
+/* 磁盘占用 */
+.tbx-disk { list-style: none; margin: 0; padding: 0; }
+.tbx-disk-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 2px; font-size: 11.5px;
+}
+.tbx-disk-row__name { flex: 0 0 110px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tbx-disk-row__bar {
+  flex: 1 1 auto; height: 8px; border-radius: 999px;
+  background: var(--panel-soft); border: 1px solid var(--line); overflow: hidden;
+}
+.tbx-disk-row__bar > span { display: block; height: 100%; background: linear-gradient(90deg, #865d58, #e0b04a); }
+.tbx-disk-row__size { flex: 0 0 74px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.tbx-disk-row__files { flex: 0 0 74px; text-align: right; color: var(--text-2); }
+.btn--xs { padding: 2px 8px; font-size: 11px; }
+
+/* 回声洞 */
+.tbx-cave {
+  display: block; width: 100%; margin-top: 8px;
+  padding: 16px 12px; border-radius: 10px;
+  border: 1px dashed var(--line); background: var(--panel-soft);
+  color: var(--text); font-size: 12.5px; line-height: 1.8;
+  text-align: left; cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.tbx-cave:hover { border-color: var(--accent); background: var(--panel); }
+.tbx-cave:active { transform: scale(.995); }
+.tbx-cave__hint { font-size: 11px; color: var(--text-2); margin-top: 8px; line-height: 1.6; }
+
+/* 下载自定义文件 */
+.tbx-dl { display: flex; flex-direction: column; gap: 9px; }
+.tbx-dl__state { font-size: 11.5px; color: var(--text-2); }
+.tbx-dl__bar {
+  height: 8px; border-radius: 999px; overflow: hidden;
+  background: var(--panel-soft); border: 1px solid var(--line);
+}
+.tbx-dl__bar-fill {
+  height: 100%; width: 0;
+  background: linear-gradient(90deg, #7ec699, #865d58);
+  transition: width .2s ease;
+}
+.tbx-dl__bar[hidden] { display: none; }
+/* 百宝箱标题图标（宝箱造型，跟导航栏同一枚） */
+.tbx-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -3px;
+  margin-right: 7px;
+  color: var(--accent);
+}
