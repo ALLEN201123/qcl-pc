@@ -17,6 +17,259 @@ const { registerIpc, initContext } = require('./ipc');
 const DEV = process.argv.includes('--dev') || process.env.QCL_DEV === '1';
 
 /**
+ * ★★★ 卸载入口（2026-11-22 补，用户指出「只做了启动程序，没做卸载程序」）
+ *
+ * 背景：安装时注册表里写的是
+ *     UninstallString = "<安装目录>\QCL.exe" --uninstall
+ * 但主进程**从来没处理过 --uninstall** —— 控制面板点「卸载」什么都不发生，
+ * 是个死链接。这里把入口接上。
+ *
+ * 设计要点：
+ *   · 卸载是**独立窗口**，不是主界面弹对话框（主界面此时不该启动）
+ *   · 逐项让用户勾选要保留什么：程序文件（必删）/ 游戏数据（默认保留）/ 缓存
+ *   · 游戏数据默认保留 —— 里面有存档、账号、服务端，误删代价远高于程序本身
+ *   · 程序目录最后删，且交给一个分离的 cmd 脚本（正在运行的 exe 删不掉自己）
+ */
+const IS_UNINSTALL = process.argv.includes('--uninstall');
+
+/**
+ * 卸载界面（独立的 BrowserWindow，用内联 HTML，不依赖 qcl:// 与渲染层）
+ *
+ * 为什么不用主界面：卸载时主界面不该启动（它要加载实例、账号、服务端一堆东西），
+ * 而且卸载往往发生在主程序已经被删了一半的情况下 —— 越简单越可靠。
+ * 所以这里用 data: URL 直接塞一段自带样式的 HTML，与主界面完全解耦。
+ */
+async function runUninstaller() {
+  const un = require('./uninstall');
+  const survey = un.survey();
+
+  // 把调研结果内联进页面（避免卸载窗口还要走 IPC）
+  const itemsJson = JSON.stringify(survey.items);
+  const dirsJson = JSON.stringify({
+    installDir: survey.installDir,
+    dataDir: survey.dataDir,
+    cacheDir: survey.cacheDir,
+  });
+
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8" />
+<title>卸载 QCL</title>
+<style>
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:22px 24px; font-family:"Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+    background:#1e1c1b; color:#e8e2dc; font-size:13px; -webkit-user-select:none;
+  }
+  h1 { font-size:16px; margin:0 0 4px; font-weight:600; }
+  .sub { color:#9c918a; font-size:11.5px; margin-bottom:16px; }
+  .item {
+    display:flex; gap:10px; align-items:flex-start; padding:10px 12px; margin-bottom:8px;
+    border:1px solid #3a3431; border-radius:9px; background:#262322;
+  }
+  .item.locked { border-color:#4a3f3b; background:#2b2624; }
+  .item input { margin-top:2px; flex:0 0 auto; }
+  .item .body { flex:1 1 auto; min-width:0; }
+  .item .name { font-weight:600; font-size:12.5px; display:flex; align-items:center; gap:8px; }
+  .item .size { color:#c9a08a; font-size:11px; font-weight:400; }
+  .item .path {
+    font-family:ui-monospace,Consolas,monospace; font-size:10.5px; color:#8d827b;
+    margin-top:3px; word-break:break-all; user-select:text;
+  }
+  .item .desc { color:#9c918a; font-size:11px; margin-top:4px; line-height:1.65; }
+  .keep-tag {
+    font-size:10px; padding:1px 6px; border-radius:999px;
+    border:1px solid #4d7a5d; color:#8fc6a0;
+  }
+  .must-tag {
+    font-size:10px; padding:1px 6px; border-radius:999px;
+    border:1px solid #7a4d4d; color:#c68f8f;
+  }
+  .warn {
+    margin:14px 0; padding:10px 12px; border-radius:8px; font-size:11.5px; line-height:1.75;
+    background:rgba(198,143,143,.1); border:1px solid rgba(198,143,143,.35); color:#e0b4b4;
+  }
+  .foot { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+  button {
+    padding:7px 18px; border-radius:7px; border:1px solid #4a3f3b; background:#2e2a28;
+    color:#e8e2dc; font-size:12.5px; cursor:pointer; font-family:inherit;
+  }
+  button:hover { border-color:#8a6f66; }
+  button.primary { background:#7a3f3a; border-color:#9a5049; }
+  button.primary:hover { background:#8d4a44; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { color:#9c918a; font-size:11.5px; margin-top:10px; min-height:16px; }
+</style></head><body>
+  <h1>卸载 Quanta Craft Launcher PC</h1>
+  <div class="sub">选择要删除的内容。带「默认保留」的项取消勾选就会留下。</div>
+  <div id="list"></div>
+  <div class="warn" id="warn"></div>
+  <div id="status"></div>
+  <div class="foot">
+    <button id="cancel">取消</button>
+    <button id="go" class="primary">卸载</button>
+  </div>
+<script>
+  const ITEMS = ${itemsJson};
+  const DIRS = ${dirsJson};
+  const list = document.getElementById('list');
+  const warn = document.getElementById('warn');
+
+  function render() {
+    list.innerHTML = '';
+    ITEMS.forEach(function (it) {
+      if (!it.exists) return;
+      const wrap = document.createElement('label');
+      wrap.className = 'item' + (it.locked ? ' locked' : '');
+      const checked = it.locked ? true : !it.keepDefault;
+      wrap.innerHTML =
+        '<input type="checkbox" data-key="' + it.key + '"' + (checked ? ' checked' : '') +
+        (it.locked ? ' disabled' : '') + ' />' +
+        '<div class="body">' +
+          '<div class="name">' + it.label +
+            '<span class="size">' + it.sizeText + '</span>' +
+            (it.locked ? '<span class="must-tag">必删</span>' : (it.keepDefault ? '<span class="keep-tag">默认保留</span>' : '')) +
+          '</div>' +
+          '<div class="path">' + it.dir + '</div>' +
+          '<div class="desc">' + it.desc + '</div>' +
+        '</div>';
+      list.appendChild(wrap);
+    });
+    updateWarn();
+  }
+
+  function picked(key) {
+    const el = document.querySelector('input[data-key="' + key + '"]');
+    if (!el) return false;
+    return el.checked;
+  }
+
+  function updateWarn() {
+    const delData = picked('data');
+    if (delData) {
+      warn.style.display = 'block';
+      warn.innerHTML = '<strong>注意：你勾选了「删除游戏数据」。</strong><br />' +
+        '里面包含版本、实例、<strong>世界存档</strong>、账号、服务端配置 —— ' +
+        '删掉之后<strong>无法恢复</strong>。如果只是想重装，请取消这一项。';
+    } else {
+      warn.style.display = 'none';
+    }
+  }
+
+  document.addEventListener('change', updateWarn);
+
+  document.getElementById('cancel').addEventListener('click', function () {
+    window.qclUninstall.cancel();
+  });
+
+  document.getElementById('go').addEventListener('click', function () {
+    const delData = picked('data');
+    if (delData) {
+      if (!window.confirm('确定连「游戏数据」一起删除吗？\\n\\n世界存档、账号、服务端都会消失，无法恢复。')) return;
+    }
+    this.disabled = true;
+    document.getElementById('cancel').disabled = true;
+    document.getElementById('status').textContent = '正在卸载…';
+    window.qclUninstall.run({
+      removeProgram: true,
+      removeData: delData,
+      removeCache: picked('cache')
+    });
+  });
+
+  window.qclUninstall.onProgress(function (msg) {
+    document.getElementById('status').textContent = msg;
+  });
+
+  render();
+</script>
+</body></html>`;
+
+  const win = new (require('electron').BrowserWindow)({
+    width: 660,
+    height: 560,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: '卸载 QCL',
+    autoHideMenuBar: true,
+    backgroundColor: '#1e1c1b',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'uninstall-preload.js'),
+    },
+  });
+  win.setMenu(null);
+
+  // 让页面里的 window.qclUninstall 能调到主进程
+  const { ipcMain } = require('electron');
+  const CH = 'qcl-uninstall';
+  const progress = (msg) => {
+    try {
+      if (!win.isDestroyed()) win.webContents.send(`${CH}:progress`, String(msg));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  ipcMain.handle(`${CH}:run`, async (e, opts) => {
+    const report = await un.perform({
+      removeProgram: opts && opts.removeProgram,
+      removeData: opts && opts.removeData,
+      removeCache: opts && opts.removeCache,
+      onProgress: progress,
+    });
+    // 结果展示
+    const lines = [];
+    if (report.removed.length) lines.push(`已删除：\n  ${report.removed.join('\n  ')}`);
+    if (report.kept.length) lines.push(`已保留：\n  ${report.kept.join('\n  ')}`);
+    if (report.errors.length) lines.push(`出错的项：\n  ${report.errors.join('\n  ')}`);
+    if (report.needManual.length) {
+      lines.push('程序目录会在本窗口关闭后自动删除。');
+    }
+    dialog.showMessageBox({
+      type: report.errors.length ? 'warning' : 'info',
+      title: '卸载完成',
+      message: report.errors.length ? '卸载完成（有部分项未成功）' : '卸载完成',
+      detail: lines.join('\n\n') || '已完成。',
+      buttons: ['确定'],
+    }).then(() => {
+      try {
+        app.exit(0);
+      } catch {
+        /* ignore */
+      }
+    });
+    return report;
+  });
+
+  ipcMain.handle(`${CH}:cancel`, async () => {
+    try {
+      app.exit(0);
+    } catch {
+      /* ignore */
+    }
+    return true;
+  });
+
+  win.on('closed', () => {
+    try {
+      ipcMain.removeHandler(`${CH}:run`);
+      ipcMain.removeHandler(`${CH}:cancel`);
+    } catch {
+      /* ignore */
+    }
+    // 窗口被关掉也退出（卸载器不该留在后台）
+    try {
+      app.exit(0);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+}
+
+/**
  * ★ 自定义协议 qcl://app/*
  *
  * 为什么必须有它：渲染层要加载 glTF 模型与皮肤贴图，而 Chromium **禁止 file:// 页面用
@@ -232,6 +485,17 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     // 不要默认菜单栏（Alt 也不弹），界面自己画标题栏
     Menu.setApplicationMenu(null);
+
+    // ★ --uninstall：只开卸载窗口，不启动主界面
+    if (IS_UNINSTALL) {
+      try {
+        await runUninstaller();
+      } catch (err) {
+        dialog.showErrorBox('卸载出错', String((err && err.message) || err));
+      }
+      app.quit();
+      return;
+    }
 
     // 先注册 qcl:// 协议，再创建窗口（窗口用 qcl://app/index.html 加载）
     registerAppProtocol();
