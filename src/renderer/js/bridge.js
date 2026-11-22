@@ -69,6 +69,13 @@ export function initBridge() {
       'settings:changed',
       'java:changed',
       'win:state',
+      // 服务端（一键开服）与控制台日志
+      'server:log',
+      'server:state',
+      'server:changed',
+      // 服务端内网穿透（frp）
+      'server:tunnel:log',
+      'server:tunnel:state',
     ]) {
       try {
         window.qcl.on(evt, (payload) => emitLocal(evt, payload));

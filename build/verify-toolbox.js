@@ -199,7 +199,14 @@ section('⑤ 内存优化（诚实性）');
   push('shell.js 导航含 toolbox', /id: 'toolbox'/.test(shellJs));
   const channels = ['toolbox:jrrp', 'toolbox:memoryOptimize', 'toolbox:scanRubbish', 'toolbox:cleanRubbish', 'toolbox:diskUsage', 'toolbox:cave', 'toolbox:download', 'toolbox:openDownloadDir', 'toolbox:pickFolder'];
   for (const c of channels) push(`ipc.js 注册 ${c}`, ipc.includes(`'${c}'`));
-  push('★ preload INVOKE_RE 含 toolbox（否则全线调不通）', /toolbox\)/.test(pre) || /\|toolbox\)/.test(pre), (pre.match(/INVOKE_RE = (.*)/) || [])[1]?.slice(0, 90));
+  // ★ 用正则本身判断（而不是匹配字面量）：白名单在 2026-11-22 改成了支持多段通道，
+  //   前缀后面可能跟 '|' 或 ')'，硬匹配 'toolbox)' 会误报
+  const reBoxMatch = /const INVOKE_RE = (\/.*\/);/.exec(pre);
+  let boxAllowed = false;
+  if (reBoxMatch) {
+    try { boxAllowed = eval(reBoxMatch[1]).test('toolbox:jrrp') === true; } catch { boxAllowed = false; }
+  }
+  push('★ preload INVOKE_RE 放行 toolbox（否则全线调不通）', boxAllowed, (reBoxMatch ? reBoxMatch[1].slice(0, 80) : '未找到'));
   // 白名单真的能放行
   const reMatch = /const INVOKE_RE = (\/.*\/);/.exec(pre);
   if (reMatch) {

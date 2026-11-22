@@ -1418,6 +1418,581 @@ const handlers = {
     }
   },
 
+  // ---------- 服务端（一键开服） ----------
+  /**
+   * ★ 比安卓 1.6.6 的一键开服多出来的能力：
+   *   多核心（原版/Paper/Purpur/Fabric）、端口预检、Java 自动匹配、
+   *   完整 server.properties（46 项）、RCON、备份/恢复/导出、崩溃诊断、自动重启。
+   *
+   * 所有通道以 `server:` 开头 —— preload 的 INVOKE_RE 已同步放行。
+   */
+  'server:list': async () => {
+    try {
+      const mod = need('server');
+      return { ok: true, list: mod.list(home()) };
+    } catch (err) {
+      return { ok: false, list: [], error: err?.message || String(err) };
+    }
+  },
+  'server:create': async (payload = {}) => {
+    try {
+      const mod = need('server');
+      const meta = mod.create(home(), payload);
+      return { ok: true, server: meta };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:update': async ({ id, patch } = {}) => {
+    try {
+      return { ok: true, server: need('server').update(home(), id, patch || {}) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:remove': async ({ id } = {}) => {
+    try {
+      return { ok: true, ...need('server').remove(home(), id) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:meta': async ({ id } = {}) => {
+    try {
+      return { ok: true, server: need('server').readMeta(home(), id) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 可选的服务端核心与 MC 版本 */
+  'server:options': async () => {
+    try {
+      const mod = need('server');
+      let versions = [];
+      let versionsError = '';
+      try {
+        versions = await mod.availableVersions(home(), { source: ctx.settings.value('downloader').source });
+      } catch (err) {
+        versionsError = err?.message || String(err);
+      }
+      // 内置远古服务端（Infdev / Beta 插件版）
+      let builtin = [];
+      try {
+        builtin = need('ancientServer').list().filter((b) => b.exists);
+      } catch {
+        builtin = [];
+      }
+      return {
+        ok: true,
+        kinds: mod.SERVER_KINDS.map((k) => ({ id: k, label: mod.KIND_LABELS[k] })),
+        versions,
+        versionsError,
+        builtin,
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /**
+   * Betacraft 服务端归档（Mojang 已下架的那些）。
+   * 按「正式版 / 快照 / 愚人节版 / 远古版」四类返回，供界面展示。
+   */
+  'server:archive': async ({ force } = {}) => {
+    try {
+      const sa = need('serverarchive');
+      const r = await sa.listByCategory({ home: home(), force: !!force });
+      return { ok: !!r.ok, ...r };
+    } catch (err) {
+      return { ok: false, groups: [], total: 0, error: err?.message || String(err) };
+    }
+  },
+  /** 查某个 MC 版本的服务端从哪来（Mojang / 归档 / 内置），给界面提示用 */
+  'server:source': async ({ mcVersion, kind, preferBuiltin } = {}) => {
+    try {
+      const mod = need('server');
+      const info = await mod.resolveServerJar(kind || 'vanilla', mcVersion, {
+        home: home(),
+        preferBuiltin: !!preferBuiltin,
+      });
+      return {
+        ok: true,
+        from: info.builtin ? 'builtin' : info.fromArchive ? 'archive' : 'mojang',
+        fileName: info.fileName,
+        size: info.size || 0,
+        label: info.builtin ? info.builtinInfo.label : info.fromArchive ? 'Betacraft 归档（Mojang 已下架）' : 'Mojang 官方',
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 下载服务端 jar（原版/Paper/Purpur/Fabric） */
+  'server:download': async ({ id, loaderVersion, preferBuiltin } = {}) => {
+    try {
+      const mod = need('server');
+      const result = await mod.downloadServerJar(home(), id, {
+        source: ctx.settings.value('downloader').source,
+        loaderVersion,
+        preferBuiltin: !!preferBuiltin,
+        onLog: (line) => send('server:log', { id, line }),
+        onProgress: (p) => send('task:progress', { kind: 'server-download', id, ...p }),
+      });
+      send('server:changed', { id });
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 启动前检查（端口/Java/jar/EULA） */
+  'server:preflight': async ({ id } = {}) => {
+    try {
+      return { ok: true, ...(await need('server').preflight(home(), id)) };
+    } catch (err) {
+      return { ok: false, issues: [{ level: 'error', text: err?.message || String(err) }] };
+    }
+  },
+  'server:acceptEula': async ({ id } = {}) => {
+    try {
+      return { ok: true, ...need('server').acceptEula(home(), id) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:start': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const sid = id;
+      const r = await mod.start(home(), sid, {
+        onLog: (line) => send('server:log', { id: sid, line }),
+        onState: (state, message) => send('server:state', { id: sid, state, message }),
+      });
+      if (r.ok) send('server:changed', { id: sid });
+      return r;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:stop': async ({ id, waitMs } = {}) => {
+    try {
+      const mod = need('server');
+      const r = await mod.stop(home(), id, {
+        waitMs,
+        onState: (state, message) => send('server:state', { id, state, message }),
+      });
+      send('server:changed', { id });
+      return r;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:status': async ({ id } = {}) => {
+    try {
+      return { ok: true, ...need('server').status(home(), id) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 往运行中的服务端控制台写一条命令 */
+  'server:command': async ({ id, command } = {}) => {
+    try {
+      return need('server').sendCommand(home(), id, command);
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:diagnose': async ({ id } = {}) => {
+    try {
+      return { ok: true, ...need('server').diagnose(home(), id) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:openDir': async ({ id, what } = {}) => {
+    try {
+      const mod = need('server');
+      const map = {
+        work: mod.workDir(home(), id),
+        backups: mod.backupsDir(home(), id),
+        logs: mod.logsDir(home(), id),
+      };
+      const dir = map[what] || map.work;
+      fs.mkdirSync(dir, { recursive: true });
+      const err = await shell.openPath(dir);
+      return err ? { ok: false, error: err } : { ok: true, dir };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
+  // ---- server.properties（46 项完整读写） ----
+  'server:props:read': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const props = need('serverprops');
+      const work = mod.workDir(home(), id);
+      // 首次读时若文件不存在就先生成一份默认的，玩家可以配好再开服
+      const r = props.ensure(work, {});
+      return {
+        ok: true,
+        ...r,
+        fields: props.FIELDS,
+        groups: props.GROUPS,
+        presets: props.PRESETS,
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:props:write': async ({ id, patch } = {}) => {
+    try {
+      const mod = need('server');
+      const props = need('serverprops');
+      const work = mod.workDir(home(), id);
+      const r = props.write(work, patch || {});
+      // 端口变了同步到元数据
+      const port = Number(r.values['server-port']);
+      if (Number.isInteger(port)) mod.update(home(), id, { port });
+      send('server:changed', { id });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:props:applyPreset': async ({ id, presetId } = {}) => {
+    try {
+      const mod = need('server');
+      const props = need('serverprops');
+      const preset = props.PRESETS.find((p) => p.id === presetId);
+      if (!preset) return { ok: false, error: `没有这个预设：${presetId}` };
+      const r = props.write(mod.workDir(home(), id), preset.values);
+      const port = Number(r.values['server-port']);
+      if (Number.isInteger(port)) mod.update(home(), id, { port });
+      send('server:changed', { id });
+      return { ok: true, ...r, preset: preset.id };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
+  // ---- RCON ----
+  'server:rcon': async ({ id, command } = {}) => {
+    try {
+      const mod = need('server');
+      const rcon = need('serverrcon');
+      const props = need('serverprops');
+      const r = props.read(mod.workDir(home(), id));
+      const enabled = !!r.values['enable-rcon'];
+      const port = Number(r.values['rcon.port']) || 25575;
+      const password = String(r.values['rcon.password'] || '');
+      if (!enabled) return { ok: false, error: 'RCON 没有开启（去「配置」里打开 enable-rcon 并设密码）' };
+      if (!password) return { ok: false, error: 'RCON 密码为空（去「配置」里填 rcon.password）' };
+      const out = await rcon.exec({ port, password, command });
+      return { ok: true, ...out };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:players': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const rcon = need('serverrcon');
+      const props = need('serverprops');
+      const r = props.read(mod.workDir(home(), id));
+      if (!r.values['enable-rcon']) return { ok: false, error: 'RCON 没有开启', players: [], online: 0, max: 0 };
+      const out = await rcon.listPlayers({
+        port: Number(r.values['rcon.port']) || 25575,
+        password: String(r.values['rcon.password'] || ''),
+      });
+      return { ok: out.ok, ...out };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err), players: [], online: 0, max: 0 };
+    }
+  },
+  /** 开服时自动开好 RCON（省得玩家自己填密码） */
+  'server:enableRcon': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const props = need('serverprops');
+      const r = props.read(mod.workDir(home(), id));
+      let pw = String(r.values['rcon.password'] || '').trim();
+      if (!pw) pw = crypto.randomBytes(9).toString('base64url').slice(0, 12);
+      const port = Number(r.values['rcon.port']) || 25575;
+      const pr = await mod.checkPort(port);
+      const usePort = pr.free ? port : (await mod.findFreePort(25575, 25620)) || port;
+      const out = props.write(mod.workDir(home(), id), {
+        'enable-rcon': true,
+        'rcon.port': usePort,
+        'rcon.password': pw,
+      });
+      return { ok: true, ...out, password: pw, port: usePort, portChanged: usePort !== port };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
+  // ---- 白名单 / OP ----
+  'server:whitelist': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const p = path.join(mod.workDir(home(), id), 'whitelist.json');
+      let list = [];
+      try {
+        list = JSON.parse(fs.readFileSync(p, 'utf8')) || [];
+      } catch {
+        list = [];
+      }
+      return { ok: true, list, path: p };
+    } catch (err) {
+      return { ok: false, list: [], error: err?.message || String(err) };
+    }
+  },
+  'server:whitelist:add': async ({ id, name, uuid } = {}) => {
+    try {
+      const mod = need('server');
+      const work = mod.workDir(home(), id);
+      const p = path.join(work, 'whitelist.json');
+      const n = String(name || '').trim();
+      if (!n) return { ok: false, error: '玩家名为空' };
+      let list = [];
+      try {
+        list = JSON.parse(fs.readFileSync(p, 'utf8')) || [];
+      } catch {
+        list = [];
+      }
+      if (list.some((x) => String(x.name || '').toLowerCase() === n.toLowerCase())) {
+        return { ok: false, error: `「${n}」已经在白名单里了` };
+      }
+      // 正版 UUID：由玩家提供；离线服允许用离线 UUID 或留空（服务端会自己补）
+      let useUuid = String(uuid || '').trim();
+      if (!useUuid) {
+        // 离线模式的 UUID 规则：UUIDv3(name, "OfflinePlayer")
+        useUuid = mod.offlineUuid(n);
+      }
+      list.push({ uuid: useUuid, name: n });
+      fs.writeFileSync(p, JSON.stringify(list, null, 2), 'utf8');
+      // 服务端在跑就热加载
+      const rt = mod.getRuntime(id);
+      let reloaded = false;
+      if (rt && rt.child && !rt.stopped) {
+        mod.sendCommand(home(), id, 'whitelist reload');
+        reloaded = true;
+      }
+      return { ok: true, list, uuid: useUuid, reloaded };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:whitelist:remove': async ({ id, name } = {}) => {
+    try {
+      const mod = need('server');
+      const work = mod.workDir(home(), id);
+      const p = path.join(work, 'whitelist.json');
+      const n = String(name || '').trim().toLowerCase();
+      let list = [];
+      try {
+        list = JSON.parse(fs.readFileSync(p, 'utf8')) || [];
+      } catch {
+        list = [];
+      }
+      const before = list.length;
+      list = list.filter((x) => String(x.name || '').toLowerCase() !== n);
+      fs.writeFileSync(p, JSON.stringify(list, null, 2), 'utf8');
+      const rt = mod.getRuntime(id);
+      let reloaded = false;
+      if (rt && rt.child && !rt.stopped) {
+        mod.sendCommand(home(), id, 'whitelist reload');
+        reloaded = true;
+      }
+      return { ok: true, removed: before - list.length, list, reloaded };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
+  // ---- 备份 / 恢复 / 导出 ----
+  'server:backup:create': async ({ id, reason, full } = {}) => {
+    try {
+      const backup = need('serverbackup');
+      const r = await backup.create(home(), id, {
+        reason: reason || 'manual',
+        full: !!full,
+        onLog: (line) => send('server:log', { id, line }),
+      });
+      send('server:changed', { id });
+      return r;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:backup:list': async ({ id } = {}) => {
+    try {
+      return { ok: true, list: need('serverbackup').list(home(), id) };
+    } catch (err) {
+      return { ok: false, list: [], error: err?.message || String(err) };
+    }
+  },
+  'server:backup:remove': async ({ id, name } = {}) => {
+    try {
+      return { ok: true, ...need('serverbackup').remove(home(), id, name) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:backup:restore': async ({ id, name } = {}) => {
+    try {
+      const r = await need('serverbackup').restore(home(), id, {
+        name,
+        onLog: (line) => send('server:log', { id, line }),
+      });
+      send('server:changed', { id });
+      return r;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:backup:export': async ({ id, name } = {}) => {
+    try {
+      const r = await need('serverbackup').exportZip(home(), id, { name });
+      if (r.ok) await shell.showItemInFolder(r.path);
+      return r;
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
+  // ---- 内网穿透（frp） ----
+  /**
+   * ★ 用 frp 而不是 Terracotta：Terracotta 是「MC 客户端开房间联机」用的
+   *   （扫本机游戏世界的端口），独立服务端要的是标准 frp 端口映射。
+   *
+   * 两条路：
+   *   ① 樱花frp（免费公共节点，填 token 即可）
+   *   ② 自建 frps（填地址/端口/token）
+   */
+  'server:tunnel:status': async () => {
+    try {
+      const t = need('servertunnel');
+      return { ok: true, ...t.status(), installed: t.isInstalled(home()), version: t.FRP_VERSION };
+    } catch (err) {
+      return { ok: false, running: false, error: err?.message || String(err) };
+    }
+  },
+  /** 准备 frpc 引擎（下载官方 frp 包并解出可执行文件） */
+  'server:tunnel:prepare': async () => {
+    try {
+      const t = need('servertunnel');
+      const r = await t.ensureInstalled(home(), {
+        onLog: (line) => send('server:tunnel:log', { line }),
+      });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 樱花frp：验证 token 并取账号 */
+  'server:tunnel:sakuraUser': async ({ token } = {}) => {
+    try {
+      const s = need('sakurafrp');
+      return { ok: true, account: await s.userInfo(token) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 樱花frp：我的隧道列表 */
+  'server:tunnel:sakuraTunnels': async ({ token } = {}) => {
+    try {
+      const s = need('sakurafrp');
+      return { ok: true, list: await s.tunnelList(token) };
+    } catch (err) {
+      return { ok: false, list: [], error: err?.message || String(err) };
+    }
+  },
+  /** 樱花frp：节点列表 */
+  'server:tunnel:sakuraNodes': async ({ token, level } = {}) => {
+    try {
+      const s = need('sakurafrp');
+      return { ok: true, list: await s.nodeList(token, Number(level) || 0) };
+    } catch (err) {
+      return { ok: false, list: [], error: err?.message || String(err) };
+    }
+  },
+  /** 樱花frp：建隧道 */
+  'server:tunnel:sakuraCreate': async ({ token, node, name, localPort, remotePort } = {}) => {
+    try {
+      const s = need('sakurafrp');
+      await s.createTunnel(token, { node, name, type: 'tcp', localIp: '127.0.0.1', localPort, remotePort });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /**
+   * 启动穿透。
+   * mode: 'sakura'（樱花，用 tunnelId 拉配置）| 'custom'（自建，用给定参数生成配置）
+   */
+  'server:tunnel:start': async (payload = {}) => {
+    try {
+      const t = need('servertunnel');
+      const { mode, token, tunnelId, serverAddr, serverPort, authToken, localPort, remotePort, proxyName } = payload;
+      const sid = payload.serverId;
+      // 端口：没指定就从 server.properties 读
+      let port = Number(localPort) || 0;
+      if (!port && sid) {
+        try {
+          const props = need('serverprops');
+          const r = props.read(need('server').workDir(home(), sid));
+          port = Number(r.values['server-port']) || 25565;
+        } catch {
+          port = 25565;
+        }
+      }
+      if (!port) port = 25565;
+
+      let configText = '';
+      if (mode === 'sakura') {
+        const s = need('sakurafrp');
+        const cfg = await s.tunnelConfig(token, tunnelId);
+        configText = cfg.toml;
+      } else {
+        configText = t.buildToml({
+          serverAddr,
+          serverPort,
+          authToken,
+          localPort: port,
+          remotePort: remotePort || port,
+          proxyName,
+        });
+      }
+
+      const r = await t.start({
+        home: home(),
+        configText,
+        onLog: (line) => send('server:tunnel:log', { line }),
+        onState: (state, message) => send('server:tunnel:state', { state, message }),
+      });
+      return { ok: true, ...r, localPort: port };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:tunnel:stop': async () => {
+    try {
+      const t = need('servertunnel');
+      const r = await t.stop();
+      send('server:tunnel:state', { state: 'stopped', message: '已停止' });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:tunnel:diagnose': async () => {
+    try {
+      const t = need('servertunnel');
+      return { ok: true, ...t.diagnose() };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
   // ---------- 整合包 ----------
   /**
    * 契约（frontend-dev 按这个写界面）：

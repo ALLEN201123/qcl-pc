@@ -41,6 +41,8 @@ const NAV_ITEMS = [
   { id: 'toolbox', tip: '百宝箱', kind: 'svg', glyph: 'toolbox' },
   { id: 'mods', tip: '模组管理', kind: 'svg', glyph: 'pack' },
   { id: 'multiplayer', tip: '多人联机', kind: 'svg', glyph: 'multiplayer' },
+  // ★ 服务端（一键开服）：多核心、RCON、自动备份、崩溃诊断
+  { id: 'server', tip: '服务端', kind: 'svg', glyph: 'server' },
   { id: 'setting', tip: '设置', kind: 'svg', glyph: 'setting' },
   // ★ 使用说明（中文补丁怎么来的 / 远古版本为什么叫中国版 Betacraft / 加载器怎么选）
   { id: 'help', tip: '使用说明', kind: 'svg', glyph: 'info' },

@@ -7,8 +7,20 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const INVOKE_RE = /^(app|win|settings|instances|versions|install|launch|accounts|java|log|shell|tools|mods|modpack|terracotta|skin|authlib|content|loader|worlds|toolbox):[A-Za-z]+$/;
-const EVENT_RE = /^(task:progress|launch:log|launch:state|launch:stage|launch:game-ready|instances:changed|accounts:changed|settings:changed|java:changed|win:state|terracotta:state)$/;
+/**
+ * IPC 通道白名单。
+ *
+ * ★★★ 2026-11-22 修（实测踩到：服务端的「配置」tab 一片空白）。
+ *
+ * 以前是 `/^(app|...):[A-Za-z]+$/` —— **只允许一段**，即 `server:list` 过、
+ * 但 `server:props:read` / `server:backup:create` 这类**两段命令名**会被拒，
+ * 渲染层拿到「不允许调用的通道」，界面就静默空白（不报错，最难查）。
+ *
+ * ⇒ 改成允许 `前缀:段[:段...]` 的多段形式（每段仍是纯字母，避免奇怪字符混入）。
+ *   前缀白名单本身没放宽，未知前缀（如 evil:x）照样拦。
+ */
+const INVOKE_RE = /^(app|win|settings|instances|versions|install|launch|accounts|java|log|shell|tools|mods|modpack|terracotta|skin|authlib|content|loader|worlds|toolbox|server):[A-Za-z]+(?::[A-Za-z]+)*$/;
+const EVENT_RE = /^(task:progress|launch:log|launch:state|launch:stage|launch:game-ready|instances:changed|accounts:changed|settings:changed|java:changed|win:state|terracotta:state|server:log|server:state|server:changed|server:tunnel:log|server:tunnel:state)$/;
 
 /** cb -> wrapper，用于 off 时精确移除 */
 const wrappers = new Map();

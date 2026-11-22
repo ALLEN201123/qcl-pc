@@ -41,6 +41,8 @@ import { modsPage } from './pages/mods.js';
 import { multiplayerPage } from './pages/multiplayer.js';
 // ★ 百宝箱（照 PCL 的功能清单：今日人品 / 内存优化 / 清理垃圾 / 磁盘占用 / 回声洞 / 自定义下载）
 import { toolboxPage } from './pages/toolbox.js';
+// ★ 服务端（一键开服）：多核心 / RCON / 自动备份，比安卓 1.6.6 的一键开服完整
+import { serverPage } from './pages/server.js';
 
 /* ------------------------------ 页面注册 ------------------------------ */
 
@@ -80,6 +82,7 @@ const PAGES = [
   modsPage,
   multiplayerPage,
   toolboxPage,
+  serverPage,
 ];
 
 function registerPages() {

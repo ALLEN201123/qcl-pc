@@ -91,7 +91,19 @@ module.exports = {
     '!src/renderer/_devtest/**',
     '!**/*.map',
     '!**/.DS_Store',
-    'package.json'
+    /**
+     * ★ 2026-11-22：内置远古服务端（Infdev Ultimate / Beta 1.7.3 插件版）放在
+     *   assets/ancient-servers/，必须一起打进去 ——
+     *   core/ancientServer.js 在开发时读 <项目>/assets，打包后读
+     *   <resources>/ancient-servers（由下面 extraResources 复制过去）。
+     *   漏掉这一条，Infdev / Beta 插件服就会报"内置服务端文件缺失"。
+     */
+    'assets/ancient-servers/**/*',
+    'package.json',
+  ],
+
+  extraResources: [
+    { from: 'assets/ancient-servers', to: 'ancient-servers' },
   ],
 
   // 复用已经装好的 electron 发行版，避免打包时再下 115MB（本机缓存目录权限异常）
