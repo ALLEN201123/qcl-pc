@@ -1437,8 +1437,44 @@ const handlers = {
   'server:create': async (payload = {}) => {
     try {
       const mod = need('server');
-      const meta = mod.create(home(), payload);
+      /**
+       * ★ 用 createAuto：自动分配一个不冲突的端口。
+       *   原来走 create 会写死 25565，建第二个服就撞端口（用户提过这个）。
+       *   如果玩家在界面上自己填了端口，payload.port 会带过来，原样使用。
+       */
+      const meta = await mod.createAuto(home(), payload);
+      // 顺手把端口写进 server.properties，避免 meta 与 props 不一致
+      try {
+        const props = need('serverprops');
+        const dir = mod.workDir(home(), meta.id);
+        const cur = props.read(dir);
+        if (cur && cur.values && String(cur.values['server-port']) !== String(meta.port)) {
+          props.write(dir, { 'server-port': String(meta.port) });
+        }
+      } catch {
+        /* 配置写失败不影响建服 */
+      }
       return { ok: true, server: meta };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 服务端在磁盘上的真实位置（界面上直接显示给玩家看） */
+  'server:paths': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const root = mod.serversRoot(home());
+      if (!id) return { ok: true, root };
+      const dir = mod.serverDir(home(), id);
+      const work = mod.workDir(home(), id);
+      return {
+        ok: true,
+        root,
+        dir,
+        workDir: work,
+        backups: mod.backupsDir(home(), id),
+        logs: mod.logsDir(home(), id),
+      };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
@@ -1876,6 +1912,12 @@ const handlers = {
     try {
       const t = need('servertunnel');
       const bore = need('boretunnel');
+      let stun = { running: false };
+      try {
+        stun = need('stuntunnel').status();
+      } catch {
+        stun = { running: false };
+      }
       const bs = bore.status();
       const frp = t.status();
       return {
@@ -1886,6 +1928,12 @@ const handlers = {
         version: t.FRP_VERSION,
         frp: { running: !!frp.running, installed: t.isInstalled(home()) },
         bore: { running: !!bs.running, publicAddr: bs.publicAddr || '', lines: bs.lines || [] },
+        stun: {
+          running: !!stun.running,
+          publicAddr: stun.publicAddr || '',
+          natType: stun.natType || '',
+          lines: stun.lines || [],
+        },
       };
     } catch (err) {
       return { ok: false, running: false, error: err?.message || String(err) };
@@ -1936,6 +1984,53 @@ const handlers = {
       return { ok: true, ...r };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /**
+   * STUN 打洞（P2P，不走中转，延迟最低）。
+   * ★ 只在全锥形 NAT（NAT1）下成立；CGNAT 环境连不进来，界面上必须说清楚。
+   */
+  'server:tunnel:stunStart': async ({ localPort, serverAddr, serverId } = {}) => {
+    try {
+      const stun = need('stuntunnel');
+      let port = Number(localPort) || 0;
+      if (!port && serverId) {
+        try {
+          const props = need('serverprops');
+          const r = props.read(need('server').workDir(home(), serverId));
+          port = Number(r.values['server-port']) || 25565;
+        } catch {
+          port = 25565;
+        }
+      }
+      if (!port) port = 25565;
+      const r = await stun.start({
+        localPort: port,
+        serverAddr,
+        onLog: (line) => send('server:tunnel:log', { line }),
+        onState: (state, message) => send('server:tunnel:state', { state, message }),
+      });
+      return { ok: true, ...r, localPort: port, mode: 'stun' };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:tunnel:stunStop': async () => {
+    try {
+      const r = await need('stuntunnel').stop();
+      send('server:tunnel:state', { state: 'stopped', message: '已停止' });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** STUN 诊断：暴露探测到的 NAT 情况，供界面提示「能不能打洞」 */
+  'server:tunnel:stunStatus': async () => {
+    try {
+      const stun = need('stuntunnel');
+      return { ok: true, ...stun.status(), servers: stun.DEFAULT_SERVERS };
+    } catch (err) {
+      return { ok: false, running: false, error: err?.message || String(err) };
     }
   },
   /** 魅frp：验证 token */
@@ -2031,6 +2126,18 @@ const handlers = {
         return { ok: true, ...r, localPort: port, mode: 'bore' };
       }
 
+      // STUN 打洞也不走 frpc
+      if (mode === 'stun') {
+        const stun = need('stuntunnel');
+        const r = await stun.start({
+          localPort: port,
+          serverAddr,
+          onLog: (line) => send('server:tunnel:log', { line }),
+          onState: (state, message) => send('server:tunnel:state', { state, message }),
+        });
+        return { ok: true, ...r, localPort: port, mode: 'stun' };
+      }
+
       let configText = '';
       if (mode === 'sakura') {
         const s = need('sakurafrp');
@@ -2062,7 +2169,7 @@ const handlers = {
       return { ok: false, error: err?.message || String(err) };
     }
   },
-  /** 停止任意一种穿透（bore 与 frp 都停，避免残留） */
+  /** 停止任意一种穿透（bore / stun / frp 都停，避免残留） */
   'server:tunnel:stop': async () => {
     try {
       const results = [];
@@ -2076,6 +2183,11 @@ const handlers = {
       } catch {
         /* ignore */
       }
+      try {
+        results.push({ kind: 'stun', ...(await need('stuntunnel').stop()) });
+      } catch {
+        /* ignore */
+      }
       send('server:tunnel:state', { state: 'stopped', message: '已停止' });
       return { ok: true, results };
     } catch (err) {
@@ -2086,6 +2198,143 @@ const handlers = {
     try {
       const t = need('servertunnel');
       return { ok: true, ...t.diagnose() };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+
+  // ---- 服务端的插件 / 模组 ----
+  /**
+   * ★ 按核心类型自动决定装插件还是模组：
+   *   Paper/Purpur → plugins/   （插件，走 CurseForge）
+   *   Fabric/Forge/NeoForge → mods/（模组，走 Modrinth）
+   *   vanilla → 都不支持，界面要提示换核心
+   */
+  'server:content:info': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      if (!meta) throw new Error('服务端不存在');
+      const ct = sc.contentTypeFor(meta.kind);
+      const dir = sc.targetDir(mod.workDir(home(), id), ct);
+      return {
+        ok: true,
+        kind: meta.kind,
+        mcVersion: meta.mcVersion,
+        contentType: ct,
+        dirName: sc.targetDirName(ct),
+        dir,
+        /** 给界面拼按钮文案用 */
+        label: ct === 'plugin' ? '插件' : ct === 'mod' ? '模组' : '（不支持）',
+        supported: ct !== 'none',
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:content:installed': async ({ id, contentType } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const ct = contentType || sc.contentTypeFor(meta.kind);
+      const r = sc.installed(mod.workDir(home(), id), ct);
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, items: [], error: err?.message || String(err) };
+    }
+  },
+  'server:content:search': async ({ id, query, limit, offset } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const r = await sc.search({
+        kind: meta.kind,
+        mcVersion: meta.mcVersion,
+        query,
+        limit,
+        offset,
+      });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, items: [], total: 0, error: err?.message || String(err) };
+    }
+  },
+  'server:content:versions': async ({ id, projectId, contentType } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const r = await sc.versions(projectId, {
+        kind: meta.kind,
+        mcVersion: meta.mcVersion,
+        contentType,
+      });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, items: [], error: err?.message || String(err) };
+    }
+  },
+  'server:content:install': async ({ id, projectId, versionId, contentType, source } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const rt = mod.getRuntime(id);
+      if (rt && rt.child && !rt.stopped) {
+        throw new Error('服务端正在运行。装插件/模组要先停止服务端，否则文件被占用且不会生效。');
+      }
+      const r = await sc.install({
+        workDir: mod.workDir(home(), id),
+        kind: meta.kind,
+        projectId,
+        versionId,
+        contentType,
+        source,
+        onProgress: (p) => send('task:progress', { kind: 'server-content', id, ...p }),
+      });
+      send('server:changed', { id });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:content:toggle': async ({ id, name, disabled } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const ct = sc.contentTypeFor(meta.kind);
+      const r = sc.toggle(mod.workDir(home(), id), ct, name, !!disabled);
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:content:remove': async ({ id, name } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const ct = sc.contentTypeFor(meta.kind);
+      const r = sc.remove(mod.workDir(home(), id), ct, name);
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 打开插件/模组目录 */
+  'server:content:openDir': async ({ id } = {}) => {
+    try {
+      const mod = need('server');
+      const sc = need('servercontent');
+      const meta = mod.readMeta(home(), id);
+      const ct = sc.contentTypeFor(meta.kind);
+      const dir = sc.ensureDir(mod.workDir(home(), id), ct);
+      await shell.openPath(dir);
+      return { ok: true, dir };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }

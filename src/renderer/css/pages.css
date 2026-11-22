@@ -2037,3 +2037,56 @@ button.dl__follow:hover {
   border-radius:9px; padding:9px 11px;
 }
 .srv-tunnel__notice strong { color:#7ec699; }
+/* 新建服务端：版本类型分组（正式版/快照/远古版本/手动填） */
+.srv-vgroups { display:flex; gap:6px; flex-wrap:wrap; }
+.srv-vgroup {
+  padding:5px 12px; border-radius:8px; cursor:pointer; font-size:12px;
+  border:1px solid var(--line); background:var(--panel-soft); color:var(--text);
+  transition:border-color .15s ease, background .15s ease;
+}
+.srv-vgroup:hover { border-color:var(--accent); }
+.srv-vgroup.is-active {
+  border-color:var(--accent); background:var(--panel);
+  box-shadow:inset 0 0 0 1px rgba(134,93,88,.4);
+}
+/* 服务端部署路径 */
+.srv-path {
+  display:flex; align-items:center; gap:8px; padding:7px 11px;
+  border:1px solid var(--line); border-radius:8px; background:var(--panel-soft);
+}
+.srv-path__label { font-size:11px; color:var(--text-2); flex:0 0 auto; }
+.srv-path__value {
+  flex:1 1 auto; font-family:ui-monospace,Consolas,monospace; font-size:11px;
+  color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  user-select:text;
+}
+
+/* 插件 / 模组页 */
+.srv-content { display:flex; flex-direction:column; gap:12px; }
+.srv-content__head { display:flex; align-items:flex-start; gap:12px; }
+.srv-content__title { font-size:13.5px; font-weight:600; color:var(--text); }
+.srv-content__desc { font-size:11.5px; color:var(--text-2); line-height:1.8; margin-top:4px; max-width:680px; }
+.srv-content__subtitle { font-size:12px; font-weight:600; color:var(--text); }
+.srv-content__installed, .srv-content__search { display:flex; flex-direction:column; gap:8px; }
+.srv-content__list { display:flex; flex-direction:column; gap:4px; max-height:220px; overflow:auto; }
+.srv-content__item {
+  display:flex; align-items:center; gap:8px; padding:6px 10px;
+  border:1px solid var(--line); border-radius:7px; background:var(--panel-soft);
+}
+.srv-content__item.is-disabled { opacity:.5; }
+.srv-content__name {
+  font-size:11.5px; color:var(--text); max-width:340px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.srv-content__results {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:8px;
+  max-height:320px; overflow:auto; padding-top:4px;
+}
+.srv-content__result {
+  border:1px solid var(--line); border-radius:9px; padding:9px 11px; background:var(--panel-soft);
+}
+.srv-content__rname { font-size:12.5px; font-weight:600; color:var(--text); }
+.srv-content__rdesc {
+  font-size:10.5px; line-height:1.6; margin-top:3px;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}

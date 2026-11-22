@@ -40,7 +40,7 @@ const jsonstore = require('./jsonstore');
  * ============================================================ */
 
 /** 支持的服务端核心类型 */
-const SERVER_KINDS = ['vanilla', 'paper', 'purpur', 'fabric'];
+const SERVER_KINDS = ['vanilla', 'paper', 'purpur', 'fabric', 'forge', 'neoforge'];
 
 /** 各类型的中文名 */
 const KIND_LABELS = {
@@ -48,6 +48,8 @@ const KIND_LABELS = {
   paper: 'Paper（性能优化，插件服）',
   purpur: 'Purpur（Paper 增强分支）',
   fabric: 'Fabric 服务端（模组服）',
+  forge: 'Forge（老牌模组服）',
+  neoforge: 'NeoForge（Forge 现代分支）',
 };
 
 /** MC 版本 → 建议 Java 主版本（与启动器主逻辑保持一致） */
@@ -186,6 +188,44 @@ function list(home) {
 }
 
 /** 新建服务端（只建目录与元数据，jar 由 download 步骤装） */
+/**
+ * 自动挑一个没被本项目其它服务端占用的端口。
+ *
+ * ★★★ 2026-11-22 修（用户提问：「新建第二个服务端，端口会不会从 25565 改成 25566？」）：
+ *   原来 defaultMeta 里的 `port: Number(opts.port) || 25565` 是**写死 25565** 的，
+ *   于是第二个服务端也是 25565 → 两个服同时开就撞端口，第二个起不来。
+ *   （虽然开服前的端口预检会拦住并报错，但那属于「先让你犯错再告诉你」，体验很差。）
+ *
+ * 现在的规则：
+ *   ① 玩家显式传了 port → 就用它（不覆盖玩家的选择）
+ *   ② 没传 → 从 25565 开始往上找，跳过已被**本项目其它服务端**占用的端口
+ *   ③ 顺带跳过系统层已被占用的端口（用 checkPort 真绑一次）
+ *
+ * @returns {Promise<number>}
+ */
+async function pickPort(home, excludeId = '') {
+  const used = new Set();
+  let list = [];
+  try {
+    list = module.exports.list(home) || [];
+  } catch {
+    list = [];
+  }
+  for (const s of list) {
+    if (!s || s.id === excludeId) continue;
+    const p = Number(s.port);
+    if (p > 0) used.add(p);
+  }
+  for (let p = 25565; p <= 25665; p += 1) {
+    if (used.has(p)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await checkPort(p);
+    if (ok.free) return p;
+  }
+  // 极端情况：这一段全满，交给系统分配
+  return 0;
+}
+
 function create(home, opts = {}) {
   const id = opts.id ? safeId(opts.id) : `srv${Date.now().toString(36)}${crypto.randomBytes(2).toString('hex')}`;
   if (fs.existsSync(metaFile(home, id))) throw new Error(`服务端已存在：${id}`);
@@ -195,6 +235,15 @@ function create(home, opts = {}) {
   fs.mkdirSync(logsDir(home, id), { recursive: true });
   writeMeta(home, id, meta);
   return readMeta(home, id);
+}
+
+/**
+ * 异步创建：会自动分配一个不冲突的端口。
+ * 界面走这个（同步的 create 只给测试/内部用）。
+ */
+async function createAuto(home, opts = {}) {
+  const port = Number(opts.port) > 0 ? Number(opts.port) : await pickPort(home);
+  return create(home, { ...opts, port });
 }
 
 /** 更新元数据（浅合并，autoBackup 单独深合并） */
@@ -457,6 +506,160 @@ async function fabricServerInfo(mcVersion, loaderVersion) {
 }
 
 /**
+ * Forge 服务端。
+ *
+ * ★ Forge 与 Paper/原版不同：**没有现成的服务端 jar 可下**。
+ *   官方发布的是一个 installer（`forge-<mc>-<ver>-installer.jar`），
+ *   必须跑它 `--installServer <目录>` 才会生成 `libraries/` + `run.sh/run.bat` + 一个
+ *   `forge-<mc>-<ver>.jar`（1.17+ 是 `bootstraplauncher` 那套，启动方式不同）。
+ *
+ * 本函数只负责**下载 installer**；真正执行安装由 installForgeServer() 做。
+ */
+async function forgeServerInfo(mcVersion, options = {}) {
+  const http = require('./http');
+  // promotions_slim.json 里有每个 MC 版本推荐的 forge 版本
+  const promo = await http.fetchJson('https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json', {
+    timeoutMs: 25000,
+  });
+  const promos = (promo && promo.promos) || {};
+  const recommended = promos[`${mcVersion}-recommended`] || promos[`${mcVersion}-latest`];
+  if (!recommended) {
+    throw new Error(
+      `Forge 没有 ${mcVersion} 的服务端（它只支持官方发布过的那些版本）。` +
+        '想开这个版本的模组服，可以试 NeoForge（1.20.2+）或 Fabric。'
+    );
+  }
+  const full = `${mcVersion}-${recommended}`;
+  const fileName = `forge-${full}-installer.jar`;
+  // 官方 maven 直链（比 files.minecraftforge.net 的广告页稳）
+  const url = `https://maven.minecraftforge.net/net/minecraftforge/forge/${full}/${fileName}`;
+  return {
+    url,
+    sha1: '',
+    size: 0,
+    fileName,
+    /** 标记这是 installer，不是可直接跑的 server jar */
+    installer: true,
+    forgeVersion: recommended,
+    full,
+  };
+}
+
+/**
+ * NeoForge 服务端。
+ *
+ * ★★ 两个坑（2026-11-22 实测踩到）：
+ *
+ *   ① **版本号规则不是简单的「MC 小版本.patch」**：
+ *      实际是 `<mcMajor>.<mcMinor>.<mcPatch>.<build>`，例如
+ *        MC 1.21.1  →  21.1.72       （三段）
+ *        MC 26.3    →  26.3.0.115    （四段！patch 位补 0）
+ *      所以匹配要按「前缀 + 段数」分别处理，不能只拼 `minor.patch.`。
+ *
+ *   ② **官方 maven `maven.neoforged.net` 在本机直连拿不到**（请求失败），
+ *      但 BMCLAPI 镜像 `bmclapi2.bangbang93.com/maven/...` 可以，
+ *      而且一次给全 1877 个版本。所以清单走 BMCLAPI，
+ *      安装器 jar 也优先用镜像地址（官方地址作为回退）。
+ */
+async function neoforgeServerInfo(mcVersion, options = {}) {
+  const http = require('./http');
+
+  // ① 版本清单：官方失败就回落 BMCLAPI 镜像
+  const listUrls = [
+    'https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/maven-metadata.xml',
+    'https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml',
+  ];
+  let meta = '';
+  let lastErr = null;
+  for (const u of listUrls) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      meta = await http.fetchText(u, { timeoutMs: 25000 });
+      if (meta && meta.includes('<version>')) break;
+    } catch (err) {
+      lastErr = err;
+      meta = '';
+    }
+  }
+  if (!meta) {
+    throw new Error(`拿不到 NeoForge 版本清单：${lastErr ? lastErr.message : '所有源都不可用'}`);
+  }
+
+  const versions = [];
+  const re = /<version>([^<]+)<\/version>/g;
+  let m;
+  while ((m = re.exec(meta))) versions.push(m[1]);
+  if (!versions.length) throw new Error('NeoForge 版本清单是空的');
+
+  /**
+   * ② 按 MC 版本算前缀。
+   *    MC 1.21.1 → 目标前缀 "21.1."   （三段版本 21.1.72）
+   *    MC 26.3   → 目标前缀 "26.3.0." （四段版本 26.3.0.115）
+   *    通用规则：取 MC 的 (minor, patch)，NeoForge 用 minor.patch 或 minor.patch.0
+   */
+  const mm = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(String(mcVersion));
+  if (!mm) {
+    throw new Error(`NeoForge 不支持 ${mcVersion}（它从 1.20.2 开始，版本号形如 1.21.1）`);
+  }
+  const major = mm[1];
+  const minorRaw = mm[2];
+  const patchRaw = mm[3];
+
+  // NeoForge 的 major 段：MC 1.x → x；MC 26.x → 26
+  const nfMajor = major === '1' ? minorRaw : major;
+  const nfMinor = major === '1' ? (patchRaw || '0') : minorRaw;
+  const nfPatch = major === '1' ? null : (patchRaw || '0');
+
+  const prefixes = [];
+  if (nfPatch === null) {
+    // MC 1.x → 三段版本号 21.1.72
+    prefixes.push(`${nfMajor}.${nfMinor}.`);
+  } else {
+    // MC 26.x → 四段版本号 26.3.0.115
+    prefixes.push(`${nfMajor}.${nfMinor}.${nfPatch}.`);
+    prefixes.push(`${nfMajor}.${nfMinor}.`);
+  }
+
+  const pickBuild = (v) => {
+    const parts = String(v).split('.');
+    return Number(parts[parts.length - 1]) || 0;
+  };
+
+  let matched = [];
+  for (const p of prefixes) {
+    matched = versions.filter((v) => v.startsWith(p));
+    if (matched.length) break;
+  }
+  if (!matched.length) {
+    // 给一个更有用的错误：列出附近可用的版本
+    const near = versions
+      .filter((v) => v.startsWith(`${nfMajor}.`))
+      .slice(-6)
+      .join(', ');
+    throw new Error(
+      `NeoForge 没有 ${mcVersion} 的构建。` +
+        (near ? `它附近可用的版本有：${near}。` : '') +
+        '可以改用 Forge 或 Fabric。'
+    );
+  }
+
+  matched.sort((a, b) => pickBuild(b) - pickBuild(a));
+  const ver = matched[0];
+  const fileName = `neoforge-${ver}-installer.jar`;
+
+  return {
+    /** 优先走 BMCLAPI 镜像（官方在本机不通），下载器失败会自动回退 */
+    url: `https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/${ver}/${fileName}`,
+    fallbackUrls: [`https://maven.neoforged.net/releases/net/neoforged/neoforge/${ver}/${fileName}`],
+    sha1: '',
+    size: 0,
+    fileName,
+    installer: true,
+    neoforgeVersion: ver,
+  };
+}
+
+/**
  * 按 kind 取服务端下载信息。
  *
  * ★ `preferBuiltin`：远古版本让玩家自己选「原版服务端」还是「内置社区服务端」。
@@ -494,7 +697,152 @@ async function resolveServerJar(kind, mcVersion, options = {}) {
   if (k === 'paper') return paperServerInfo(mcVersion, options);
   if (k === 'purpur') return purpurServerInfo(mcVersion);
   if (k === 'fabric') return fabricServerInfo(mcVersion, options.loaderVersion);
+  if (k === 'forge') return forgeServerInfo(mcVersion, options);
+  if (k === 'neoforge') return neoforgeServerInfo(mcVersion, options);
   throw new Error(`未知的服务端类型：${kind}`);
+}
+
+/**
+ * Forge / NeoForge：跑官方 installer 生成服务端。
+ *
+ * ★ 这两个核心没有「下载即用」的 jar：installer 跑完会在目标目录生成
+ *   ``` 
+ *   libraries/  （几百 MB 依赖）
+ *   run.bat / run.sh（1.16 及以前）
+ *   或 @user_jvm_args.txt + win_args.txt（1.17+）
+ *   ```
+ *   所以我们下载完 installer 后必须**真的执行它**。
+ *
+ * ★ 常见坑（已在安卓版踩过）：installer 需要 `launcher_profiles.json` 存在，
+ *   否则报 "There is no Minecraft launcher profile"。这里先写一份最小的。
+ *
+ * @returns {Promise<{ok:boolean, jar?:string, launchArgs?:string[], error?:string}>}
+ */
+async function installForgeLike(home, id, installerPath, options = {}) {
+  const log = typeof options.onLog === 'function' ? options.onLog : () => {};
+  const dir = workDir(home, id);
+  const meta = readMeta(home, id);
+  const jre = options.javaPath || (await resolveJava(home, meta)).path;
+
+  // ① installer 要求目录里有个 launcher_profiles.json
+  const lp = path.join(dir, 'launcher_profiles.json');
+  if (!fs.existsSync(lp)) {
+    fs.writeFileSync(
+      lp,
+      JSON.stringify({ profiles: {}, settings: {}, version: 3 }, null, 2),
+      'utf8'
+    );
+  }
+
+  log(`开始运行安装器：${path.basename(installerPath)} --installServer`);
+  const { spawnSync } = require('node:child_process');
+  const args = [
+    '-Xmx1024M',
+    '-Djava.awt.headless=true',
+    '-Dfile.encoding=UTF-8',
+    '-jar',
+    installerPath,
+    '--installServer',
+    dir,
+  ];
+  log(`命令：${path.basename(jre)} ${args.join(' ')}`);
+
+  const r = spawnSync(jre, args, {
+    cwd: dir,
+    windowsHide: true,
+    timeout: 20 * 60 * 1000,
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const out = String(r.stdout || '') + String(r.stderr || '');
+  // 把安装器输出投给界面（截断，避免刷屏）
+  for (const line of out.split(/\r?\n/).slice(-120)) {
+    if (line.trim()) log(line.trim());
+  }
+  if (r.error) {
+    return { ok: false, error: `安装器启动失败：${r.error.message}` };
+  }
+  if (r.status !== 0) {
+    return {
+      ok: false,
+      error: `安装器退出码 ${r.status}。常见原因：Java 版本不对（Forge 1.17+ 要 Java 17）、网络拉不到 maven 依赖。`,
+    };
+  }
+
+  // ② 找出安装后该怎么启动
+  const found = detectForgeLaunch(dir, meta);
+  if (!found.ok) return found;
+  log(`安装完成，启动方式：${found.jar}${found.launchArgs && found.launchArgs.length ? '（带参数）' : ''}`);
+  return found;
+}
+
+/**
+ * 探测 Forge/NeoForge 装好后的启动方式。
+ *
+ * 三种形态：
+ *   A. 1.16 及以前：目录下有 `forge-<mc>-<ver>.jar`，直接 `-jar` 起
+ *   B. 1.17~1.20.x：有 `libraries/net/minecraftforge/forge/<full>/win_args.txt`，
+ *      启动类 `cpw.mods.bootstraplauncher.BootstrapLauncher`，参数 `@libraries/.../win_args.txt`
+ *   C. NeoForge 1.20.2+：同上，但路径在 `libraries/net/neoforged/neoforge/<ver>/`
+ */
+function detectForgeLaunch(dir, meta) {
+  // A：直接可跑的 jar
+  const jars = [];
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (/^forge-.*\.jar$/i.test(f) && !/installer/i.test(f)) jars.push(f);
+      if (/^neoforge-.*\.jar$/i.test(f) && !/installer/i.test(f)) jars.push(f);
+    }
+  } catch {
+    /* ignore */
+  }
+  if (jars.length) {
+    // 优先 forge-<mc>-<ver>.jar 这种完整名
+    const pick = jars.sort((a, b) => b.length - a.length)[0];
+    return { ok: true, jar: pick, launchArgs: [] };
+  }
+
+  // B/C：找 win_args.txt / unix_args.txt
+  const candidates = [];
+  const libDir = path.join(dir, 'libraries');
+  const stack = [libDir];
+  let guard = 0;
+  while (stack.length && guard < 3000) {
+    const cur = stack.pop();
+    guard += 1;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const full = path.join(cur, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (e.isFile() && /^(win|unix)_args\.txt$/i.test(e.name)) candidates.push(full);
+    }
+  }
+  if (candidates.length) {
+    const want = process.platform === 'win32' ? /win_args\.txt$/i : /unix_args\.txt$/i;
+    const argsFile = candidates.find((p) => want.test(p)) || candidates[0];
+    const rel = path.relative(dir, argsFile).split(path.sep).join('/');
+    return {
+      ok: true,
+      /** 这种形态没有单一 jar，用 @args 文件启动 */
+      jar: '',
+      launchArgs: [`@${rel}`],
+      argsFile,
+      /** BootstrapLauncher 的 main class（1.17+） */
+      mainClass: 'cpw.mods.bootstraplauncher.BootstrapLauncher',
+    };
+  }
+
+  return {
+    ok: false,
+    error:
+      '安装器跑完了，但没找到可启动的东西（既没有 forge-*.jar，也没有 win_args.txt）。' +
+      '请把服务端目录下的日志发来排查。',
+  };
 }
 
 /**
@@ -541,6 +889,41 @@ async function downloadServerJar(home, id, options = {}) {
   }
 
   const downloader = require('./downloader');
+
+  // Forge / NeoForge：先下 installer，再跑它
+  if (info.installer) {
+    if (typeof options.onLog === 'function') {
+      options.onLog(`下载安装器：${info.fileName}`);
+    }
+    const res0 = await downloader.downloadAll(
+      [{
+        url: info.url,
+        /** Forge/NeoForge 的镜像回退（官方 maven 在部分网络不通） */
+        fallbackUrls: Array.isArray(info.fallbackUrls) ? info.fallbackUrls : [],
+        dest,
+        name: info.fileName,
+      }],
+      { source: options.source, signal: options.signal, timeoutMs: 300000, onProgress: options.onProgress }
+    );
+    if (res0.failed && res0.failed.length) {
+      throw new Error(`安装器下载失败：${res0.failed[0].error || '未知错误'}`);
+    }
+    const inst = await installForgeLike(home, id, dest, { onLog: options.onLog, javaPath: options.javaPath });
+    if (!inst.ok) throw new Error(inst.error || 'Forge 服务端安装失败');
+    // 记录启动方式（jar 可能为空，改用 @args）
+    update(home, id, {
+      jar: inst.jar || '',
+      /** 1.17+ 的 @args 启动参数 */
+      launchArgs: inst.launchArgs || [],
+      mainClass: inst.mainClass || '',
+    });
+    return {
+      jar: inst.jar || '(args 启动)',
+      path: dir,
+      bytes: info.size || 0,
+      info: { kind: meta.kind, installer: true, launchArgs: inst.launchArgs || [] },
+    };
+  }
 
   const tasks = [
     {
@@ -645,9 +1028,25 @@ async function preflight(home, id) {
   const dir = workDir(home, id);
   if (!fs.existsSync(dir)) issues.push({ level: 'error', text: '工作目录不存在' });
 
-  const jarPath = meta.jar ? path.join(dir, meta.jar) : '';
-  if (!meta.jar) issues.push({ level: 'error', text: '还没下载服务端 jar（先点「下载服务端」）' });
-  else if (!fs.existsSync(jarPath)) issues.push({ level: 'error', text: `服务端 jar 不存在：${meta.jar}` });
+  /**
+   * ★ Forge/NeoForge 1.17+ 没有单一 jar，用的是 @args 文件。
+   *   这两种形态要分开判定，否则会误报「还没下载服务端 jar」。
+   */
+  const hasArgsLaunch = Array.isArray(meta.launchArgs) && meta.launchArgs.length > 0;
+  /** 供返回值用（args 形态下没有 jar，给 null） */
+  let jarPath = null;
+  if (hasArgsLaunch) {
+    const argsRel = String(meta.launchArgs[0] || '').replace(/^@/, '');
+    const argsPath = path.join(dir, argsRel);
+    if (!fs.existsSync(argsPath)) {
+      issues.push({ level: 'error', text: `启动参数文件不存在：${argsRel}（建议重新下载服务端）` });
+    }
+  } else if (!meta.jar) {
+    issues.push({ level: 'error', text: '还没下载服务端 jar（先点「下载服务端」）' });
+  } else {
+    jarPath = path.join(dir, meta.jar);
+    if (!fs.existsSync(jarPath)) issues.push({ level: 'error', text: `服务端 jar 不存在：${meta.jar}` });
+  }
 
   if (!hasEula(home, id)) issues.push({ level: 'warn', text: '还没同意 EULA（Mojang 要求首次启动前同意，点「同意 EULA」即可）' });
 
@@ -737,10 +1136,28 @@ async function start(home, id, options = {}) {
   }
   if (!jvmArgs.some((a) => /-Djava\.awt\.headless/i.test(a))) jvmArgs.push('-Djava.awt.headless=true');
 
-  const progArgs = ['-jar', meta.jar];
+  const progArgs = [];
+  /**
+   * ★ Forge / NeoForge 1.17+ 不是「-jar 一个文件」：
+   *   它们用 `@libraries/.../win_args.txt`（里面写了 -cp 和 main class），
+   *   所以这里要区分两种启动形态：
+   *     ① 普通 jar：`-jar server.jar`
+   *     ② args 文件：`@相对路径`（JVM 会把它展开成完整参数）
+   */
+  if (Array.isArray(meta.launchArgs) && meta.launchArgs.length) {
+    for (const a of meta.launchArgs) progArgs.push(a);
+  } else {
+    if (!meta.jar) {
+      throw new Error('这个服务端还没装好（没有可启动的 jar），请先点「下载服务端」');
+    }
+    progArgs.push('-jar', meta.jar);
+  }
   for (const a of String(meta.extraArgs || '').split(/\s+/).filter(Boolean)) progArgs.push(a);
   // 新版服务端支持 --nogui；老版本不认会报错，所以只在 1.14+ 加
-  if (javaMajorSupportsNogui(meta.mcVersion) && !progArgs.includes('--nogui')) progArgs.push('--nogui');
+  // ★ Forge/NeoForge 的 args 文件已经带了启动参数，不再追加 --nogui
+  if (!(Array.isArray(meta.launchArgs) && meta.launchArgs.length)) {
+    if (javaMajorSupportsNogui(meta.mcVersion) && !progArgs.includes('--nogui')) progArgs.push('--nogui');
+  }
 
   const args = jvmArgs.concat(progArgs);
 
@@ -1234,6 +1651,8 @@ module.exports = {
   // CRUD
   list,
   create,
+  createAuto,
+  pickPort,
   update,
   remove,
   readMeta,
@@ -1248,6 +1667,10 @@ module.exports = {
   paperServerInfo,
   purpurServerInfo,
   fabricServerInfo,
+  forgeServerInfo,
+  neoforgeServerInfo,
+  installForgeLike,
+  detectForgeLaunch,
   safeJarName,
   // EULA
   acceptEula,

@@ -81,6 +81,14 @@ const CF_CLASS_IDS = {
   shader: 6552,
   datapack: 6945,
   world: 17,
+  /**
+   * ★ 2026-11-22 新增：Bukkit Plugins = 5。
+   *   背景：Modrinth **不收编 MC 插件**（它的 categories 里只有
+   *   fabric/forge/neoforge/quilt，没有 paper/bukkit/spigot），
+   *   所以查「服务端插件」只能走 CurseForge 这条线。
+   */
+  plugin: 5,
+  plugins: 5,
 };
 /** CurseForge 分页上限：pageSize > 50 镜像返回 500，必须夹住。 */
 const CF_MAX_LIMIT = 50;
@@ -118,7 +126,14 @@ const SOURCE_LIST = [
 ];
 
 /** Modrinth 真实存在的 project_type。 */
-const PROJECT_TYPES = ['mod', 'modpack', 'resourcepack', 'shader', 'datapack'];
+/**
+ * ★ 2026-11-22 加 `plugin`：
+ *   Modrinth 官方**没有** plugin 这个 project_type（它只有 mod/modpack/resourcepack/shader/datapack），
+ *   Spigot/Paper 插件在 CurseForge 那边是独立的 classId=5（Bukkit Plugins）。
+ *   为了让上层（服务端的插件管理）能统一按 'plugin' 请求，这里把它收进白名单；
+ *   Modrinth 那条线遇到 plugin 会由服务端模块自行换成 mod+loader 处理。
+ */
+const PROJECT_TYPES = ['mod', 'modpack', 'resourcepack', 'shader', 'datapack', 'plugin'];
 
 /**
  * 类型别名 → 真实 project_type（Modrinth 口径）。

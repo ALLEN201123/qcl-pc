@@ -397,7 +397,7 @@ module.exports = {
   buildBindingRequest,
   parseBindingResponse,
   parseServer,
-  probeOnce,
+  probeWithListen,
   start,
   stop,
   status,

@@ -290,10 +290,18 @@ function drawMain() {
         </div>
       </div>
 
+      <!-- 部署位置：让玩家随时看得到服务端到底在哪个文件夹 -->
+      <div class="srv-path" id="srv-path">
+        <span class="srv-path__label">部署位置</span>
+        <code class="srv-path__value" id="srv-path-value">…</code>
+        <button class="btn btn--ghost btn--sm" id="srv-path-copy" type="button">复制路径</button>
+      </div>
+
       <div class="srv-tabs" id="srv-tabs">
         <button class="segmented__item" type="button" data-tab="console">控制台</button>
         <button class="segmented__item" type="button" data-tab="config">配置</button>
         <button class="segmented__item" type="button" data-tab="rcon">RCON / 玩家</button>
+        <button class="segmented__item" type="button" data-tab="content">插件 / 模组</button>
         <button class="segmented__item" type="button" data-tab="tunnel">内网穿透</button>
         <button class="segmented__item" type="button" data-tab="backup">备份</button>
         <button class="segmented__item" type="button" data-tab="diag">诊断</button>
@@ -314,6 +322,31 @@ function bindDetailEvents() {
   q('#srv-stop')?.addEventListener('click', stopServer);
   q('#srv-download')?.addEventListener('click', downloadJar);
   q('#srv-open')?.addEventListener('click', () => call('server:openDir', { id: view.currentId, what: 'work' }));
+
+  // ★ 部署位置：把真实磁盘路径显示出来（玩家能看、能复制、能打开）
+  (async () => {
+    const pr = await call('server:paths', { id: view.currentId }, { optional: true });
+    const p = pr && pr.ok ? pr.data : null;
+    const el = q('#srv-path-value');
+    if (el && p && p.workDir) {
+      el.textContent = p.workDir;
+      el.title = `服务端目录：${p.dir}\n世界与配置：${p.workDir}\n备份：${p.backups}\n日志：${p.logs}`;
+    } else if (el) {
+      el.textContent = '（拿不到路径）';
+    }
+  })();
+  q('#srv-path-copy')?.addEventListener('click', async () => {
+    const el = q('#srv-path-value');
+    const text = el ? el.textContent : '';
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('路径已复制', 'ok', 2500);
+    } catch {
+      toast('复制失败，可以手动选中这段路径', 'error', 3500);
+    }
+  });
+
   q('#srv-del')?.addEventListener('click', deleteServer);
 
   m.querySelectorAll('#srv-tabs [data-tab]').forEach((b) => {
@@ -332,9 +365,231 @@ function switchTab(tab) {
   if (tab === 'console') drawConsole(panel);
   else if (tab === 'config') drawConfig(panel);
   else if (tab === 'rcon') drawRcon(panel);
+  else if (tab === 'content') drawContent(panel);
   else if (tab === 'tunnel') drawTunnel(panel);
   else if (tab === 'backup') drawBackup(panel);
   else if (tab === 'diag') drawDiag(panel);
+}
+
+/* ============================================================
+ * 插件 / 模组
+ * ============================================================ */
+
+const contentView = {
+  info: null,
+  installed: [],
+  results: [],
+  query: '',
+  loading: false,
+};
+
+async function drawContent(panel) {
+  if (!panel) return;
+  const infoR = await call('server:content:info', { id: view.currentId }, { optional: true });
+  const info = infoR && infoR.ok ? infoR.data : null;
+  contentView.info = info;
+
+  if (!info || !info.ok) {
+    setHTML(panel, html`<div class="srv-warn">拿不到内容信息：${esc((info && info.error) || (infoR && infoR.error) || '未知错误')}</div>`);
+    return;
+  }
+
+  // 原版服：明确告诉玩家为什么装不了、怎么办
+  if (!info.supported) {
+    setHTML(
+      panel,
+      html`<div class="srv-content">
+        <div class="srv-warn">
+          <strong>这个服务端是原版（vanilla），不支持插件也不支持模组。</strong>
+          <div style="margin-top:8px;line-height:1.9">
+            想装<strong>插件</strong>（EssentialsX / WorldEdit 这类）→ 用 <strong>Paper</strong> 或 <strong>Purpur</strong><br />
+            想装<strong>模组</strong>（Lithium / JEI 这类）→ 用 <strong>Fabric</strong> / <strong>Forge</strong> / <strong>NeoForge</strong>
+          </div>
+          <div style="margin-top:8px" class="srv-dim">
+            换核心要新建一个服务端（世界可以之后用备份/复制迁过去）。
+          </div>
+        </div>
+      </div>`
+    );
+    return;
+  }
+
+  const isPlugin = info.contentType === 'plugin';
+  const label = isPlugin ? '插件' : '模组';
+
+  // 已安装列表
+  const insR = await call('server:content:installed', { id: view.currentId }, { optional: true });
+  const ins = insR && insR.ok ? insR.data : null;
+  contentView.installed = (ins && ins.items) || [];
+
+  setHTML(
+    panel,
+    html`<div class="srv-content">
+      <div class="srv-content__head">
+        <div>
+          <div class="srv-content__title">${esc(label)}管理</div>
+          <div class="srv-content__desc">
+            这个服务端是 <strong>${esc(info.kind)}</strong> · MC ${esc(info.mcVersion)}，
+            ${esc(label)}放在 <code>${esc(info.dirName)}/</code> 目录。
+            ${isPlugin
+              ? ''
+              : '模组服注意：客户端也要装同样的模组才能进（纯服务端模组除外）。'}
+          </div>
+        </div>
+        <span class="grow"></span>
+        <button class="btn btn--ghost btn--sm" id="cnt-open" type="button">${raw(icon('folder', 14))}打开目录</button>
+      </div>
+
+      <div class="srv-path" id="cnt-path">
+        <span class="srv-path__label">部署位置</span>
+        <code class="srv-path__value">${esc(info.dir || '')}</code>
+      </div>
+
+      <div class="srv-content__installed">
+        <div class="srv-hstack">
+          <span class="srv-content__subtitle">已安装（${contentView.installed.length}）</span>
+          <span class="grow"></span>
+          <button class="btn btn--ghost btn--sm" id="cnt-refresh" type="button">刷新</button>
+        </div>
+        ${
+          contentView.installed.length
+            ? html`<div class="srv-content__list">
+                ${contentView.installed.map(
+                  (it) => html`<div class="srv-content__item ${it.disabled ? 'is-disabled' : ''}">
+                    <span class="srv-content__name" title="${esc(it.name)}">${esc(it.base)}</span>
+                    <span class="srv-dim">${fmtBytes(it.size)}</span>
+                    <span class="grow"></span>
+                    <button class="btn btn--ghost btn--sm" type="button" data-cnt-toggle="${esc(it.name)}" data-cnt-disabled="${it.disabled ? '1' : '0'}">${it.disabled ? '启用' : '禁用'}</button>
+                    <button class="btn btn--ghost btn--sm" type="button" data-cnt-remove="${esc(it.name)}">删除</button>
+                  </div>`
+                )}
+              </div>`
+            : html`<div class="srv-dim">还没装任何${esc(label)}。下面搜一个装进去。</div>`
+        }
+      </div>
+
+      <div class="srv-content__search">
+        <div class="srv-content__subtitle">下载${esc(label)}</div>
+        <div class="hstack">
+          <input class="input" id="cnt-q" type="text" placeholder="搜${esc(label)}名，例如 ${isPlugin ? 'essentials / worldedit' : 'lithium / jei'}" value="${esc(contentView.query)}" autocomplete="off" />
+          <button class="btn btn--sm" id="cnt-search" type="button">搜索</button>
+        </div>
+        <div class="srv-dim" id="cnt-hint">
+          ${isPlugin ? '插件来源：CurseForge（Bukkit Plugins 分类）' : '模组来源：Modrinth'} · 已按 MC ${esc(info.mcVersion)} + ${esc(info.kind)} 筛选
+        </div>
+        <div id="cnt-results" class="srv-content__results">
+          ${
+            contentView.results.length
+              ? contentView.results
+                  .map(
+                    (r) => html`<div class="srv-content__result">
+                      <div class="srv-content__rname">${esc(r.title)}</div>
+                      <div class="srv-dim srv-content__rdesc">${esc(r.description || '')}</div>
+                      <div class="srv-hstack" style="margin-top:6px">
+                        <span class="srv-dim">下载 ${fmtNum(r.downloads)}</span>
+                        <span class="grow"></span>
+                        <button class="btn btn--sm" type="button" data-cnt-install="${esc(r.slug || r.id)}" data-cnt-source="${esc(r.source || '')}">安装</button>
+                      </div>
+                    </div>`
+                  )
+                  .join('')
+              : html`<div class="srv-dim">上框输入关键词后点「搜索」。</div>`
+          }
+        </div>
+      </div>
+    </div>`
+  );
+
+  // 交互
+  panel.querySelector('#cnt-open')?.addEventListener('click', () => call('server:content:openDir', { id: view.currentId }));
+  panel.querySelector('#cnt-refresh')?.addEventListener('click', () => drawContent(panel));
+
+  const doSearch = async () => {
+    const q = (panel.querySelector('#cnt-q')?.value || '').trim();
+    contentView.query = q;
+    if (!q) {
+      toast(`先输入要搜的${label}名`, 'error', 3000);
+      return;
+    }
+    const box = panel.querySelector('#cnt-results');
+    if (box) box.innerHTML = '<div class="srv-dim">搜索中…</div>';
+    const r = await call('server:content:search', { id: view.currentId, query: q, limit: 20 });
+    const d = r && r.ok ? r.data : null;
+    if (!d || !d.ok) {
+      toast(`搜索失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 7000);
+      if (box) box.innerHTML = '<div class="srv-dim">搜索失败。</div>';
+      return;
+    }
+    contentView.results = d.items || [];
+    toast(`找到 ${contentView.results.length} 个结果`, 'ok', 3000);
+    drawContent(panel);
+  };
+  panel.querySelector('#cnt-search')?.addEventListener('click', doSearch);
+  panel.querySelector('#cnt-q')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doSearch();
+  });
+
+  // 安装
+  panel.querySelectorAll('[data-cnt-install]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const pid = b.getAttribute('data-cnt-install');
+      b.disabled = true;
+      b.textContent = '安装中…';
+      const r = await call('server:content:install', { id: view.currentId, projectId: pid });
+      const d = r && r.ok ? r.data : null;
+      if (!d || !d.ok) {
+        toast(`安装失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 9000);
+        b.disabled = false;
+        b.textContent = '安装';
+        return;
+      }
+      toast(`已安装到 ${d.dirName || d.contentType}：${d.file || ''}`, 'ok', 7000);
+      drawContent(panel);
+    });
+  });
+
+  // 启用 / 禁用
+  panel.querySelectorAll('[data-cnt-toggle]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const name = b.getAttribute('data-cnt-toggle');
+      const disabled = b.getAttribute('data-cnt-disabled') === '1';
+      const r = await call('server:content:toggle', { id: view.currentId, name, disabled: !disabled });
+      const d = r && r.ok ? r.data : null;
+      if (!d || !d.ok) {
+        toast(`操作失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 6000);
+        return;
+      }
+      drawContent(panel);
+    });
+  });
+
+  // 删除
+  panel.querySelectorAll('[data-cnt-remove]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const name = b.getAttribute('data-cnt-remove');
+      const ok = await confirmDialog({
+        title: '删除确认',
+        message: `确定删除 ${name}？\n\n只删文件，不影响世界存档。`,
+      });
+      if (!ok) return;
+      const r = await call('server:content:remove', { id: view.currentId, name });
+      const d = r && r.ok ? r.data : null;
+      if (!d || !d.ok) {
+        toast(`删除失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 6000);
+        return;
+      }
+      toast('已删除', 'ok', 3000);
+      drawContent(panel);
+    });
+  });
+}
+
+/** 数字格式化（1.4万 这种） */
+function fmtNum(n) {
+  const v = Number(n) || 0;
+  if (v >= 100000000) return `${(v / 100000000).toFixed(1)}亿`;
+  if (v >= 10000) return `${(v / 10000).toFixed(1)}万`;
+  return String(v);
 }
 
 /* ============================================================
@@ -362,11 +617,12 @@ async function drawTunnel(panel) {
   tunnelView.st = st;
   const frpInstalled = !!(st && st.installed);
   const boreRunning = !!(st && st.bore && st.bore.running);
+  const stunRunning = !!(st && st.stun && st.stun.running);
   const frpRunning = !!(st && st.frp && st.frp.running);
-  const anyRunning = boreRunning || frpRunning;
+  const anyRunning = boreRunning || stunRunning || frpRunning;
 
-  // 只有 frp 系需要引擎；bore 不需要
-  const needEngine = tunnelView.mode !== 'bore';
+  // 只有 frp 系需要引擎；bore 与 stun 都不需要
+  const needEngine = tunnelView.mode !== 'bore' && tunnelView.mode !== 'stun';
   const installed = needEngine ? frpInstalled : true;
 
   setHTML(
@@ -466,6 +722,94 @@ async function drawTunnel(panel) {
   else if (tunnelView.mode === 'sakura') drawSakura(body, panel);
   else if (tunnelView.mode === 'me') drawMe(body, panel);
   else drawCustom(body, panel);
+}
+
+/**
+ * STUN 直连（P2P 打洞）—— **暂未挂到界面上**。
+ *
+ * ★ 2026-11-22 实测结论（决定不放进 UI）：
+ *   TCP 打洞的前提是「用同一个本地端口既监听又向外连」，但 Windows 上
+ *   Node 的 `net.connect` 不暴露 SO_REUSEADDR，先 listen 再 connect 必然
+ *   `bind EADDRINUSE` / `bind EINVAL`（五台 STUN 服务器全部复现）。
+ *   隔壁 Android 项目能这么干，是因为 Kotlin 的 ServerSocket 支持
+ *   `setReuseAddress(true)` 且与探测 socket 共享端口。
+ *
+ *   ⇒ 与其放一个点了必然失败的按钮，不如不做。界面只保留真正能用的：
+ *     bore 零注册 / 樱花frp / 魅frp / 自建 frps。
+ *   core/stuntunnel.js 的 STUN 协议实现（探测公网映射）是好的，
+ *   将来若改用 UDP 打洞或引入原生扩展，可以在此基础上继续。
+ */
+function drawStun(body, panel) {
+  if (!body) return;
+  setHTML(
+    body,
+    html`<div class="srv-tunnel__form">
+      <div class="srv-tunnel__notice">
+        <strong>不走中转，朋友直接连你电脑。</strong>
+        延迟最低，也不需要注册任何账号。
+        <br />但这条**只在全锥形 NAT（NAT1）下成立** —— 用运营商大内网（CGNAT）、
+        或者防火墙拦了入站连接的环境，朋友会连不上。连不上就换「bore 零注册」。
+      </div>
+      <div class="field">
+        <div class="field__label">STUN 服务器（留空自动选）</div>
+        <input class="input" id="st-addr" type="text" placeholder="留空 = 自动从 5 台公共 STUN 服务器里挑一台能用的" autocomplete="off" />
+        <div class="field__hint">只用来探测你的公网 IP:端口，不转发任何流量</div>
+      </div>
+      <div class="hstack">
+        <button class="btn btn--sm" id="st-start" type="button">启动 STUN 直连</button>
+        <button class="btn btn--ghost btn--sm" id="st-stop" type="button">停止</button>
+        <button class="btn btn--ghost btn--sm" id="st-diag" type="button">测一下我的网络能不能打洞</button>
+      </div>
+      <div class="srv-dim" id="st-out"></div>
+    </div>`
+  );
+
+  body.querySelector('#st-start')?.addEventListener('click', async () => {
+    const addr = (body.querySelector('#st-addr')?.value || '').trim();
+    const out = body.querySelector('#st-out');
+    if (out) out.textContent = '正在探测公网映射并打洞…';
+    const r = await call('server:tunnel:stunStart', {
+      serverAddr: addr || undefined,
+      serverId: view.currentId,
+    });
+    const d = r && r.ok ? r.data : null;
+    if (!d || !d.ok) {
+      toast(`启动失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 9000);
+      if (out) out.textContent = '';
+      return;
+    }
+    if (out) {
+      out.innerHTML =
+        `公网地址：<strong style="color:#7ec699">${esc(d.publicAddr)}</strong>` +
+        `<br />探测到的 NAT 类型：${esc(d.natType || '未知')}` +
+        '<br />把这个地址发给朋友。如果对方连不上，说明你的网络不是全锥形 NAT —— 换「bore 零注册」。';
+    }
+    toast(`STUN 直连已建立：${d.publicAddr}`, 'ok', 9000);
+    await sleepMs(1500);
+    drawTunnel(panel);
+  });
+
+  body.querySelector('#st-stop')?.addEventListener('click', async () => {
+    await call('server:tunnel:stop', {});
+    toast('已停止', 'ok', 3000);
+    drawTunnel(panel);
+  });
+
+  body.querySelector('#st-diag')?.addEventListener('click', async () => {
+    const out = body.querySelector('#st-out');
+    if (out) out.textContent = '正在探测…（要连 5 台 STUN 服务器，最多十几秒）';
+    const r = await call('server:tunnel:stunStatus', {}, { optional: true });
+    const d = r && r.ok ? r.data : null;
+    if (out) {
+      if (d && d.stun) {
+        out.textContent = d.stun.running
+          ? `隧道运行中，公网地址 ${d.stun.publicAddr}`
+          : '当前没有运行中的 STUN 隧道。点「启动 STUN 直连」会真正探测并打洞。';
+      } else {
+        out.textContent = '当前没有运行中的 STUN 隧道。点「启动 STUN 直连」会真正探测并打洞。';
+      }
+    }
+  });
 }
 
 /** bore：零注册匿名 */
@@ -1430,29 +1774,91 @@ async function drawDiag(panel) {
 /**
  * 新建服务端对话框。
  *
- * ★★★ 2026-11-22 修（用户反馈「点新建服务端按钮还点不动」）。
- *   初版自己手写了一个 `.modal-overlay` + `.modal` 的浮层，但项目 CSS 里
- *   **只有 `.modal`、没有 `.modal-overlay`** —— 结果这个 div 被当成普通块元素
- *   塞进文档流末尾（页面滚到底才能看到），点了按钮看起来毫无反应。
- *   ⇒ 改用项目统一的 `openModal()`（走 #modal-root、带遮罩与关闭按钮）。
+ * ★★★ 2026-11-22 第二次修（用户反馈三件事）：
+ *
+ *   ① 「点开新建，服务端会卡成屎」——
+ *      初版是 `await call('server:options')` **之后**才弹窗，而 server:options 里
+ *      要拉 Mojang 版本清单（900+ 条，走网络，首次可能几秒到十几秒），
+ *      于是点了按钮半天没有任何反应，看起来就是卡死。
+ *      ⇒ 改成**先弹窗（骨架）、后异步填数据**，弹窗立刻出来。
+ *
+ *   ② 「上面没有远古版本、快照版本的选项」——
+ *      初版只有一个正式版下拉框 + 一个手填输入框。
+ *      ⇒ 现在分四组：正式版 / 快照 / 远古版本 / 手动填。
+ *        远古版来自 Betacraft 归档（Classic/Alpha/Beta/Infdev）+ 内置社区服务端；
+ *        快照里还并入了「官方已删除、归档保留」的那批周快照。
+ *
+ *   ③ 「模组端没有 forge 和 neoforge」——
+ *      核心列表补上 Forge 与 NeoForge。
  */
+
+/**
+ * 远古版「秒出」兜底清单（Betacraft 归档里确定存在的那些）。
+ *
+ * ★★★ 为什么需要（2026-11-22）：归档清单是从 files.betacraft.uk 逐目录抓的，
+ *   实测要 **17 秒**（release 下还有多层子目录）。这段时间里「远古版本」下拉是空的，
+ *   玩家会以为没这个功能。
+ *   ⇒ 先用这份内置清单立刻填上（都是归档里确实有的），
+ *     归档拉到后再用真实清单覆盖（并集）。
+ */
+const ANCIENT_FALLBACK = [
+  // Beta（含预发布）
+  'b1.9-pre6', 'b1.9-pre5', 'b1.9-pre4', 'b1.9-pre3', 'b1.9-pre2', 'b1.9-pre1',
+  'b1.8.1', 'b1.8', 'b1.7.3', 'b1.7.2', 'b1.7', 'b1.6.6', 'b1.6.5', 'b1.6.4',
+  'b1.5_01', 'b1.4_01', 'b1.3', 'b1.2_01', 'b1.1_02', 'b1.0',
+  // Alpha
+  'a0.2.8', 'a0.2.7', 'a0.2.6', 'a0.2.5_02', 'a0.2.5_01', 'a0.2.5', 'a0.2.4',
+  'a0.2.3', 'a0.2.2_01', 'a0.2.2', 'a0.2.1', 'a0.2.0', 'a0.1.4', 'a0.1.3', 'a0.1.2_01', 'a0.1.1', 'a0.1.0',
+  // Classic
+  'c1.10.1', 'c1.10', 'c1.9.1', 'c1.8.3', 'c1.8.2', 'c1.6', 'c1.4.1', 'c1.4', 'c1.3', 'c1.2',
+  // Infdev（内置服务端能开）
+  'inf-20100630', 'inf-20100629', 'inf-20100625', 'inf-20100624', 'inf-20100618',
+  'inf-20100617', 'inf-20100616', 'inf-20100615', 'inf-20100611', 'inf-20100608',
+  'inf-20100607', 'inf-20100420', 'inf-20100415', 'inf-20100413', 'inf-20100409',
+  'inf-20100330', 'inf-20100327', 'inf-20100325', 'inf-20100321', 'inf-20100320',
+  'inf-20100316', 'inf-20100313', 'inf-20100227',
+];
+
+/** 新建对话框的版本数据缓存（页面级，避免每次开都重新拉） */
+const createData = {
+  releases: null,
+  snapshots: null,
+  ancient: null,
+  builtin: null,
+  loading: false,
+  loadedAt: 0,
+};
+
+function kindLabelOf(kind) {
+  return (
+    {
+      vanilla: '原版',
+      paper: 'Paper',
+      purpur: 'Purpur',
+      fabric: 'Fabric',
+      forge: 'Forge',
+      neoforge: 'NeoForge',
+    }[kind] || kind
+  );
+}
+
 async function openCreateDialog() {
-  const optR = await call('server:options', {}, { optional: true });
-  const opt = optR && optR.ok ? optR.data : null;
-  const kinds = (opt && opt.kinds) || [
-    { id: 'vanilla', label: '原版' },
-    { id: 'paper', label: 'Paper' },
-    { id: 'purpur', label: 'Purpur' },
-    { id: 'fabric', label: 'Fabric' },
-  ];
-  const versions = (opt && opt.versions) || [];
-  const builtin = (opt && opt.builtin) || [];
+  /** 表单状态放闭包，不依赖 DOM 存活（openModal 关闭会清空 #modal-root） */
+  const form = {
+    name: '',
+    kind: 'vanilla',
+    group: 'release',
+    version: '',
+    manual: '',
+  };
 
   const kindHint = {
-    vanilla: '原版：Mojang 官方服务端。远古版本会自动找 Betacraft 归档里官方已下架的那些。',
+    vanilla: '原版：Mojang 官方服务端。老版本会自动找 Betacraft 归档里官方已下架的那些。',
     paper: 'Paper：性能好、支持插件。支持 1.7.10 到最新（含 26.x）。',
     purpur: 'Purpur：Paper 的增强分支，配置项更多。',
-    fabric: 'Fabric：要开模组服就选它。',
+    fabric: 'Fabric：轻量模组服，模组生态最活跃。',
+    forge: 'Forge：老牌模组服，1.7.10 / 1.12.2 时代的整合包大多用它。',
+    neoforge: 'NeoForge：Forge 的现代分支，1.20.2+ 的模组服首选。',
   };
 
   const body = `
@@ -1460,108 +1866,260 @@ async function openCreateDialog() {
       <div class="field__label">名称</div>
       <input class="input" id="sc-name" type="text" placeholder="例如 和朋友玩的世界" autocomplete="off" />
     </div>
+
     <div class="field">
       <div class="field__label">服务端核心</div>
       <div class="srv-kinds" id="sc-kinds">
-        ${kinds.map((k, i) => `<button class="srv-kind ${i === 0 ? 'is-active' : ''}" type="button" data-kind="${esc(k.id)}">${esc(k.label)}</button>`).join('')}
+        <button class="srv-kind is-active" type="button" data-kind="vanilla">原版</button>
+        <button class="srv-kind" type="button" data-kind="paper">Paper</button>
+        <button class="srv-kind" type="button" data-kind="purpur">Purpur</button>
+        <button class="srv-kind" type="button" data-kind="fabric">Fabric</button>
+        <button class="srv-kind" type="button" data-kind="forge">Forge</button>
+        <button class="srv-kind" type="button" data-kind="neoforge">NeoForge</button>
       </div>
-      <div class="field__hint" id="sc-kind-hint">${esc(kindHint.vanilla)}</div>
+      <div class="field__hint" id="sc-kind-hint">原版：Mojang 官方服务端。老版本会自动找 Betacraft 归档里官方已下架的那些。</div>
     </div>
+
     <div class="field">
-      <div class="field__label">游戏版本</div>
-      ${
-        versions.length
-          ? `<select class="input" id="sc-version">${versions.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('')}</select>`
-          : `<input class="input" id="sc-version" type="text" placeholder="例如 1.20.1（拿不到版本清单，手动填）" />`
-      }
-      <div class="field__hint">${versions.length ? `共 ${versions.length} 个正式版` : esc((opt && opt.versionsError) || '拿不到官方版本清单，手动填版本号即可')}</div>
+      <div class="field__label">版本类型</div>
+      <div class="srv-vgroups" id="sc-vgroups">
+        <button class="srv-vgroup is-active" type="button" data-group="release">正式版</button>
+        <button class="srv-vgroup" type="button" data-group="snapshot">快照</button>
+        <button class="srv-vgroup" type="button" data-group="ancient">远古版本</button>
+        <button class="srv-vgroup" type="button" data-group="manual">手动填</button>
+      </div>
     </div>
-    <div class="field">
-      <div class="field__label">手动指定版本号（可选）</div>
-      <input class="input" id="sc-version-manual" type="text" placeholder="远古版/快照直接填，如 b1.7.3 / b1.9-pre1 / 1.0.0 / 13w16a" autocomplete="off" />
-      <div class="field__hint">填了就用这里的版本，优先于上面的下拉框。官方已下架的版本会自动从 Betacraft 归档拿。</div>
+
+    <div class="field" id="sc-version-field">
+      <div class="field__label">选择版本</div>
+      <select class="input" id="sc-version">
+        <option value="">正在加载版本清单…</option>
+      </select>
+      <div class="field__hint" id="sc-version-hint">正在后台加载，这期间可以先填名称、选核心</div>
     </div>
-    ${
-      builtin.length
-        ? `<div class="field">
-            <div class="field__label">内置社区服务端</div>
-            <div class="field__hint">${
-              builtin.map((b) => `· ${esc(b.label)}：${esc(b.covers && b.covers.length ? b.covers.length + ' 个版本' : '')}`).join('<br />')
-            }<br />Infdev 官方从没发过服务端；Beta 1.7.3 想要插件支持也得用这个。下载时会自动优先用内置。</div>
-          </div>`
-        : ''
-    }
+
+    <div class="field" id="sc-manual-field" hidden>
+      <div class="field__label">手动填版本号</div>
+      <input class="input" id="sc-version-manual" type="text" placeholder="例如 b1.7.3 / b1.9-pre1 / 1.0.0 / 13w16a" autocomplete="off" />
+      <div class="field__hint">官方已下架的版本会自动从 Betacraft 归档拿</div>
+    </div>
+
+    <div class="field" id="sc-builtin-field" hidden>
+      <div class="field__label">内置社区服务端</div>
+      <div class="field__hint" id="sc-builtin-hint"></div>
+    </div>
   `;
 
-  return new Promise((resolve) => {
-    let kind = 'vanilla';
-    openModal({
-      title: '新建服务端',
-      body,
-      buttons: [
-        { text: '取消', kind: 'ghost', value: 'cancel' },
-        { text: '创建', value: 'ok' },
-      ],
-      onMount: (root) => {
-        pendingCreateForm = { kind: 'vanilla', name: '', version: '', manual: '' };
-        root.querySelectorAll('[data-kind]').forEach((b) => {
-          b.addEventListener('click', () => {
-            kind = b.getAttribute('data-kind');
-            if (pendingCreateForm) pendingCreateForm.kind = kind;
-            root.querySelectorAll('[data-kind]').forEach((x) => x.classList.toggle('is-active', x === b));
-            const h = root.querySelector('#sc-kind-hint');
-            if (h) h.textContent = kindHint[kind] || '';
-          });
+  const result = await openModal({
+    title: '新建服务端',
+    body,
+    buttons: [
+      { text: '取消', kind: 'ghost', value: 'cancel' },
+      { text: '创建', value: 'ok' },
+    ],
+    onMount: (root) => {
+      const $ = (sel) => root.querySelector(sel);
+      const sync = () => {
+        form.name = ($('#sc-name') && $('#sc-name').value) || '';
+        form.manual = ($('#sc-version-manual') && $('#sc-version-manual').value) || '';
+        const sel = $('#sc-version');
+        if (sel && sel.value) form.version = sel.value;
+      };
+
+      if ($('#sc-name')) $('#sc-name').addEventListener('input', sync);
+      if ($('#sc-version-manual')) $('#sc-version-manual').addEventListener('input', sync);
+      if ($('#sc-version')) $('#sc-version').addEventListener('change', sync);
+
+      root.querySelectorAll('[data-kind]').forEach((b) => {
+        b.addEventListener('click', () => {
+          form.kind = b.getAttribute('data-kind');
+          root.querySelectorAll('[data-kind]').forEach((x) => x.classList.toggle('is-active', x === b));
+          const h = $('#sc-kind-hint');
+          if (h) h.textContent = kindHint[form.kind] || '';
+          fillVersions(root, form);
         });
-        // 每次输入都同步到暂存对象（modal 关闭时 DOM 会被清空）
-        const bindInput = (sel, key) => {
-          const el = root.querySelector(sel);
-          if (!el) return;
-          const sync = () => {
-            if (pendingCreateForm) pendingCreateForm[key] = el.value;
-          };
-          el.addEventListener('input', sync);
-          el.addEventListener('change', sync);
-          sync();
-        };
-        bindInput('#sc-name', 'name');
-        bindInput('#sc-version', 'version');
-        bindInput('#sc-version-manual', 'manual');
-      },
-    }).then(async (val) => {
-      if (val !== 'ok') {
-        resolve(null);
-        return;
-      }
-      // openModal 关闭后 DOM 已清，所以要在 onMount 里暂存取值
-      const picked = pendingCreateForm || {};
-      pendingCreateForm = null;
-      const name = String(picked.name || '').trim();
-      const mcVersion = String(picked.manual || picked.version || '').trim();
-      if (!mcVersion) {
-        toast('请填游戏版本', 'error', 3500);
-        resolve(null);
-        return;
-      }
-      const r = await call('server:create', { name: name || `服务端 ${mcVersion}`, kind: picked.kind || 'vanilla', mcVersion });
-      const d = r && r.ok ? r.data : null;
-      if (!d || !d.ok) {
-        toast(`创建失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 6000);
-        resolve(null);
-        return;
-      }
-      await loadServers();
-      drawSidebar();
-      view.currentId = d.server.id;
-      await selectServer(d.server.id);
-      toast('已创建，接着点「下载服务端」把 jar 拉下来', 'ok', 6000);
-      resolve(d.server.id);
-    });
+      });
+
+      root.querySelectorAll('[data-group]').forEach((b) => {
+        b.addEventListener('click', () => {
+          form.group = b.getAttribute('data-group');
+          root.querySelectorAll('[data-group]').forEach((x) => x.classList.toggle('is-active', x === b));
+          const vf = $('#sc-version-field');
+          const mf = $('#sc-manual-field');
+          if (vf) vf.hidden = form.group === 'manual';
+          if (mf) mf.hidden = form.group !== 'manual';
+          fillVersions(root, form);
+        });
+      });
+
+      sync();
+      /**
+       * ★ 先立刻按当前分组填一次（用缓存/兜底清单），再后台拉真实数据。
+       *   这样「正式版/快照/远古版本」任何时候点开都有内容，不会空白。
+       */
+      fillVersions(root, form);
+      loadVersionData(root, form);
+    },
   });
+
+  if (result !== 'ok') return null;
+
+  const mcVersion = String(form.manual || form.version || '').trim();
+  if (!mcVersion) {
+    toast('请先选一个版本（或切到「手动填」填版本号）', 'error', 3500);
+    return null;
+  }
+  const r = await call('server:create', {
+    name: form.name.trim() || ('服务端 ' + mcVersion),
+    kind: form.kind,
+    mcVersion,
+  });
+  const d = r && r.ok ? r.data : null;
+  if (!d || !d.ok) {
+    toast('创建失败：' + ((d && d.error) || (r && r.error) || '未知错误'), 'error', 6000);
+    return null;
+  }
+  await loadServers();
+  drawSidebar();
+  view.currentId = d.server.id;
+  await selectServer(d.server.id);
+  toast('已创建，接着点「下载服务端」把 jar 拉下来', 'ok', 6000);
+  return d.server.id;
 }
 
-/** 暂存新建对话框里填的值（modal 关闭会清 DOM，必须提前取） */
-let pendingCreateForm = null;
+/** 后台加载版本数据（不阻塞对话框） */
+async function loadVersionData(root, form) {
+  if (createData.loading) return;
+  createData.loading = true;
+  try {
+    const jobs = [];
+
+    // ① Mojang 正式版 + 快照
+    if (!createData.releases || !createData.snapshots) {
+      jobs.push(
+        call('versions:manifest', {}, { optional: true }).then((r) => {
+          const d = r && r.ok ? r.data : null;
+          const all = (d && d.versions) || [];
+          if (!all.length) return;
+          createData.releases = all.filter((v) => v.type === 'release').map((v) => v.id);
+          createData.snapshots = all.filter((v) => v.type === 'snapshot').map((v) => v.id);
+        })
+      );
+    }
+
+    // ② Betacraft 归档（远古版 + 官方已删除的周快照）
+    if (!createData.ancient) {
+      jobs.push(
+        call('server:archive', {}, { optional: true }).then((r) => {
+          const d = r && r.ok ? r.data : null;
+          const groups = (d && d.groups) || [];
+          if (!groups.length) return;
+          const anc = groups.find((g) => g.id === 'ancient');
+          createData.ancient = anc ? anc.items.map((i) => i.version) : [];
+          const snap = groups.find((g) => g.id === 'snapshot');
+          if (snap && snap.items) {
+            const extra = snap.items.map((i) => i.version);
+            const merged = new Set((createData.snapshots || []).concat(extra));
+            createData.snapshots = Array.from(merged);
+          }
+        })
+      );
+    }
+
+    // ③ 内置远古服务端
+    if (!createData.builtin) {
+      jobs.push(
+        call('server:options', {}, { optional: true }).then((r) => {
+          const d = r && r.ok ? r.data : null;
+          createData.builtin = (d && d.builtin) || [];
+        })
+      );
+    }
+
+    await Promise.all(jobs);
+    createData.loadedAt = Date.now();
+    if (root && root.isConnected !== false) fillVersions(root, form);
+  } finally {
+    createData.loading = false;
+  }
+}
+
+/** 按当前分组填充版本下拉框 */
+function fillVersions(root, form) {
+  if (!root || !root.querySelector) return;
+  const sel = root.querySelector('#sc-version');
+  const hint = root.querySelector('#sc-version-hint');
+  const builtinField = root.querySelector('#sc-builtin-field');
+  const builtinHint = root.querySelector('#sc-builtin-hint');
+  if (!sel) return;
+
+  let list = [];
+  let note = '';
+
+  if (form.group === 'release') {
+    list = createData.releases || [];
+    note = list.length ? ('共 ' + list.length + ' 个正式版') : '正在加载官方版本清单…（也可以切到「手动填」直接填）';
+  } else if (form.group === 'snapshot') {
+    list = createData.snapshots || [];
+    note = list.length
+      ? ('共 ' + list.length + ' 个快照（含官方已删除、Betacraft 归档保留的）')
+      : '正在加载快照清单…';
+  } else if (form.group === 'ancient') {
+    /**
+     * ★ 远古版：先用内置兜底清单「秒出」，归档清单到了再合并。
+     *   归档要抓 17 秒，如果干等，玩家会以为没有这个功能（实测被吐槽过）。
+     */
+    const fallback = ANCIENT_FALLBACK;
+    const real = createData.ancient || [];
+    if (real.length) {
+      // 合并：真实清单 + 兜底里真实清单没覆盖的
+      const set = new Set(real);
+      for (const v of fallback) set.add(v);
+      list = Array.from(set);
+      note = `共 ${list.length} 个远古版本（Classic / Alpha / Beta / Infdev）`;
+    } else {
+      list = fallback.slice();
+      note = `已列出 ${list.length} 个常用远古版本；完整归档清单还在后台加载（约十几秒）`;
+    }
+  } else {
+    list = [];
+    note = '直接填版本号，官方已下架的会自动从归档找';
+  }
+
+  if (form.kind !== 'vanilla' && list.length) {
+    if (form.group === 'ancient') {
+      note += ' · 注意：' + kindLabelOf(form.kind) + ' 不提供远古版本服务端，会按原版开';
+    } else if (form.group === 'snapshot') {
+      note += ' · 注意：' + kindLabelOf(form.kind) + ' 对快照的支持以它自己的版本清单为准';
+    }
+  }
+
+  if (list.length) {
+    const prev = sel.value;
+    sel.innerHTML = list.map((v) => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+    if (prev && list.indexOf(prev) >= 0) sel.value = prev;
+    if (!sel.value) sel.value = list[0];
+    form.version = sel.value;
+  } else if (form.group !== 'manual') {
+    sel.innerHTML = '<option value="">（暂无数据，可切到「手动填」）</option>';
+  }
+
+  if (hint) hint.textContent = note;
+
+  if (builtinField && builtinHint) {
+    const bs = (createData.builtin || []).filter((x) => x.exists);
+    if (form.group === 'ancient' && bs.length) {
+      builtinField.hidden = false;
+      builtinHint.innerHTML = bs
+        .map(function (x) {
+          return '· <strong>' + esc(x.label) + '</strong>：可开 ' + x.covers.length + ' 个版本 —— ' + esc(x.desc || '');
+        })
+        .join('<br />');
+    } else {
+      builtinField.hidden = true;
+    }
+  }
+}
 
 /* ============================================================
  * 事件绑定（页面级）
