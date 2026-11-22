@@ -343,11 +343,15 @@ function switchTab(tab) {
 
 /** 穿透页的本地状态 */
 const tunnelView = {
-  mode: 'sakura',
+  /** 默认给 bore：零注册、匿名，未成年玩家也能用 */
+  mode: 'bore',
   token: '',
   account: null,
   tunnels: [],
   nodes: [],
+  meToken: '',
+  meAccount: null,
+  meProxies: [],
   st: null,
 };
 
@@ -356,40 +360,65 @@ async function drawTunnel(panel) {
   const stR = await call('server:tunnel:status', {}, { optional: true });
   const st = stR && stR.ok ? stR.data : null;
   tunnelView.st = st;
-  const installed = !!(st && st.installed);
-  const running = !!(st && st.running);
+  const frpInstalled = !!(st && st.installed);
+  const boreRunning = !!(st && st.bore && st.bore.running);
+  const frpRunning = !!(st && st.frp && st.frp.running);
+  const anyRunning = boreRunning || frpRunning;
+
+  // 只有 frp 系需要引擎；bore 不需要
+  const needEngine = tunnelView.mode !== 'bore';
+  const installed = needEngine ? frpInstalled : true;
 
   setHTML(
     panel,
     html`<div class="srv-tunnel">
       <div class="srv-tunnel__head">
         <div>
-          <div class="srv-tunnel__title">内网穿透（frp）</div>
+          <div class="srv-tunnel__title">内网穿透</div>
           <div class="srv-tunnel__desc">
             把你电脑上的服务端映射到公网，朋友不用连你家网就能进。
-            走标准 frp 协议 —— 樱花frp 有免费公共节点，也可以用你自己的 frps。
+            <strong>没有身份证 / 未满 18 也能用</strong> —— 选「bore 零注册」就行，不需要注册任何账号。
           </div>
         </div>
         <span class="grow"></span>
-        <span class="srv-tunnel__state ${running ? 'is-on' : 'is-off'}" id="srv-tunnel-chip">
-          ${running ? '穿透运行中' : installed ? '引擎已就绪' : '引擎未安装'}
+        <span class="srv-tunnel__state ${anyRunning ? 'is-on' : 'is-off'}" id="srv-tunnel-chip">
+          ${anyRunning ? '穿透运行中' : '未启动'}
         </span>
       </div>
 
-      ${!installed
+      <div class="srv-tunnel__modes">
+        <button class="srv-tmode ${tunnelView.mode === 'bore' ? 'is-active' : ''}" type="button" data-tmode="bore">
+          <span class="srv-tmode__name">bore 零注册</span>
+          <span class="srv-tmode__tag">推荐 · 匿名</span>
+          <span class="srv-tmode__desc">公共节点 bore.pub，不用注册、不用实名，连上就给个公网地址</span>
+        </button>
+        <button class="srv-tmode ${tunnelView.mode === 'sakura' ? 'is-active' : ''}" type="button" data-tmode="sakura">
+          <span class="srv-tmode__name">樱花frp</span>
+          <span class="srv-tmode__tag">需账号</span>
+          <span class="srv-tmode__desc">免费公共节点，需实名注册拿 token</span>
+        </button>
+        <button class="srv-tmode ${tunnelView.mode === 'me' ? 'is-active' : ''}" type="button" data-tmode="me">
+          <span class="srv-tmode__name">魅frp</span>
+          <span class="srv-tmode__tag">需账号</span>
+          <span class="srv-tmode__desc">另一家 frp 服务商，同样需注册拿 token</span>
+        </button>
+        <button class="srv-tmode ${tunnelView.mode === 'custom' ? 'is-active' : ''}" type="button" data-tmode="custom">
+          <span class="srv-tmode__name">自建 frps</span>
+          <span class="srv-tmode__tag">最自由</span>
+          <span class="srv-tmode__desc">自己有公网服务器时用，速度和稳定性最好</span>
+        </button>
+      </div>
+
+      ${needEngine && !frpInstalled
         ? html`<div class="srv-warn">
-            还没装 frpc 引擎（约 13 MB，从官方 frp 发布页下载）。
+            frp 系穿透需要 frpc 引擎（约 13 MB，从官方 frp 发布页下载）。
             <div style="margin-top:8px">
-              <button class="btn btn--sm" id="srv-tunnel-prepare" type="button">准备穿透组件</button>
+              <button class="btn btn--sm" id="srv-tunnel-prepare" type="button">准备 frpc 组件</button>
             </div>
             <div class="srv-dim" style="margin-top:6px" id="srv-tunnel-prep-log"></div>
+            <div class="srv-dim" style="margin-top:6px">不想装东西？切回「bore 零注册」—— 它完全不需要外部组件。</div>
           </div>`
         : raw('')}
-
-      <div class="srv-tunnel__tabs">
-        <button class="segmented__item ${tunnelView.mode === 'sakura' ? 'is-active' : ''}" type="button" data-tmode="sakura">樱花frp（免费）</button>
-        <button class="segmented__item ${tunnelView.mode === 'custom' ? 'is-active' : ''}" type="button" data-tmode="custom">自建 frps</button>
-      </div>
 
       <div class="srv-tunnel__body" id="srv-tunnel-body"></div>
 
@@ -399,17 +428,16 @@ async function drawTunnel(panel) {
           <span class="grow"></span>
           <span class="srv-dim" id="srv-tunnel-addr"></span>
         </div>
-        <pre class="srv-log srv-log--short" id="srv-tunnel-log">${(st && st.lines ? st.lines.slice(-80).join('\n') : '')}</pre>
+        <pre class="srv-log srv-log--short" id="srv-tunnel-log">${(st && st.bore && st.bore.lines ? st.bore.lines.slice(-80).join('\n') : st && st.lines ? st.lines.slice(-80).join('\n') : '')}</pre>
       </div>
     </div>`
   );
 
-  // 引擎安装
   panel.querySelector('#srv-tunnel-prepare')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const logEl = panel.querySelector('#srv-tunnel-prep-log');
     btn.disabled = true;
-    btn.textContent = '正在下载…（约 13MB，可能要一两分钟）';
+    btn.textContent = '正在下载…（约 13MB）';
     const off = on('server:tunnel:log', (p) => {
       if (logEl && p && p.line) logEl.textContent = String(p.line).slice(0, 160);
     });
@@ -426,7 +454,6 @@ async function drawTunnel(panel) {
     drawTunnel(panel);
   });
 
-  // 模式切换
   panel.querySelectorAll('[data-tmode]').forEach((b) => {
     b.addEventListener('click', () => {
       tunnelView.mode = b.getAttribute('data-tmode');
@@ -435,8 +462,146 @@ async function drawTunnel(panel) {
   });
 
   const body = panel.querySelector('#srv-tunnel-body');
-  if (tunnelView.mode === 'sakura') drawSakura(body, panel);
+  if (tunnelView.mode === 'bore') drawBore(body, panel);
+  else if (tunnelView.mode === 'sakura') drawSakura(body, panel);
+  else if (tunnelView.mode === 'me') drawMe(body, panel);
   else drawCustom(body, panel);
+}
+
+/** bore：零注册匿名 */
+function drawBore(body, panel) {
+  if (!body) return;
+  setHTML(
+    body,
+    html`<div class="srv-tunnel__form">
+      <div class="srv-tunnel__notice">
+        <strong>不需要注册、不需要实名。</strong>
+        服务端是公开的 bore.pub，连上就分配一个随机公网端口。
+        <br />代价：每次地址都不一样（重启就变）、没有密码（谁拿到地址都能连）、延迟取决于公共节点。
+        适合临时和朋友玩；长期公开服建议用自建 frps。
+      </div>
+      <div class="field">
+        <div class="field__label">bore 服务端（留空用公共 bore.pub）</div>
+        <input class="input" id="bo-addr" type="text" placeholder="bore.pub（默认）" autocomplete="off" />
+        <div class="field__hint">也可以填你自己或别人搭的 bore 服务端地址，格式 host:port</div>
+      </div>
+      <div class="hstack">
+        <button class="btn btn--sm" id="bo-start" type="button">启动穿透（零注册）</button>
+        <button class="btn btn--ghost btn--sm" id="bo-stop" type="button">停止</button>
+      </div>
+      <div class="srv-dim" id="bo-addr-out"></div>
+    </div>`
+  );
+
+  body.querySelector('#bo-start')?.addEventListener('click', async () => {
+    const addr = (body.querySelector('#bo-addr')?.value || '').trim();
+    toast('正在连接 bore 服务端…', 'info', 3000);
+    const r = await call('server:tunnel:boreStart', {
+      serverAddr: addr || undefined,
+      serverId: view.currentId,
+    });
+    const d = r && r.ok ? r.data : null;
+    if (!d || !d.ok) {
+      toast(`启动失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 8000);
+      return;
+    }
+    const out = body.querySelector('#bo-addr-out');
+    if (out) {
+      out.innerHTML = `公网地址：<strong style="color:#7ec699">${esc(d.publicAddr)}</strong> —— 把这个发给朋友，他们在游戏里「直接连接」填它就进来了。`;
+    }
+    toast(`隧道已建立：${d.publicAddr}`, 'ok', 8000);
+    await sleepMs(1200);
+    drawTunnel(panel);
+  });
+
+  body.querySelector('#bo-stop')?.addEventListener('click', async () => {
+    await call('server:tunnel:boreStop', {});
+    toast('已停止 bore 隧道', 'ok', 3000);
+    drawTunnel(panel);
+  });
+}
+
+/** 魅frp */
+async function drawMe(body, panel) {
+  if (!body) return;
+  setHTML(
+    body,
+    html`<div class="srv-tunnel__form">
+      <div class="srv-tunnel__notice">
+        魅frp 需要注册账号并实名（和樱花frp 一样）。<strong>用不了实名认证的话，请选「bore 零注册」。</strong>
+      </div>
+      <div class="field">
+        <div class="field__label">魅frp token</div>
+        <div class="hstack">
+          <input class="input" id="me-token" type="password" placeholder="在魅frp 控制台复制" value="${tunnelView.meToken || ''}" autocomplete="off" />
+          <button class="btn btn--sm" id="me-verify" type="button">验证</button>
+        </div>
+        <div class="field__hint">${tunnelView.meAccount ? `已登录：${tunnelView.meAccount.name}` : '在 mefrp.com 注册后获取'}</div>
+      </div>
+      <div class="field" ${tunnelView.meProxies.length ? '' : 'hidden'}>
+        <div class="field__label">选择隧道</div>
+        <select class="input" id="me-proxy">
+          ${tunnelView.meProxies
+            .map((p) => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.type)} · 本地 ${p.localPort}</option>`)
+            .join('')}
+        </select>
+      </div>
+      <div class="hstack">
+        <button class="btn btn--sm" id="me-start" type="button" ${tunnelView.meProxies.length ? '' : 'disabled'}>启动穿透</button>
+        <button class="btn btn--ghost btn--sm" id="me-stop" type="button">停止</button>
+      </div>
+    </div>`
+  );
+
+  body.querySelector('#me-verify')?.addEventListener('click', async () => {
+    const token = (body.querySelector('#me-token')?.value || '').trim();
+    if (!token) {
+      toast('先填 token', 'error', 3000);
+      return;
+    }
+    tunnelView.meToken = token;
+    const ur = await call('server:tunnel:meUser', { token });
+    const ud = ur && ur.ok ? ur.data : null;
+    if (!ud || !ud.ok) {
+      toast(`验证失败：${(ud && ud.error) || (ur && ur.error) || '未知错误'}`, 'error', 6000);
+      return;
+    }
+    tunnelView.meAccount = ud.account;
+    const pr = await call('server:tunnel:meProxies', { token });
+    const pd = pr && pr.ok ? pr.data : null;
+    tunnelView.meProxies = (pd && pd.list) || [];
+    toast(`已登录 ${ud.account.name}，隧道 ${tunnelView.meProxies.length} 条`, 'ok', 5000);
+    drawTunnel(panel);
+  });
+
+  body.querySelector('#me-start')?.addEventListener('click', async () => {
+    const sel = body.querySelector('#me-proxy');
+    const proxyId = sel ? sel.value : '';
+    if (!proxyId) {
+      toast('先选一条隧道', 'error', 3000);
+      return;
+    }
+    const r = await call('server:tunnel:start', {
+      mode: 'me',
+      token: tunnelView.meToken,
+      proxyId,
+      serverId: view.currentId,
+    });
+    const d = r && r.ok ? r.data : null;
+    if (!d || !d.ok) {
+      toast(`启动失败：${(d && d.error) || (r && r.error) || '未知错误'}`, 'error', 8000);
+      return;
+    }
+    toast('穿透已启动，几秒后看日志里的公网地址', 'ok', 6000);
+    await sleepMs(3000);
+    drawTunnel(panel);
+  });
+
+  body.querySelector('#me-stop')?.addEventListener('click', async () => {
+    await call('server:tunnel:stop', {});
+    toast('已停止', 'ok', 3000);
+    drawTunnel(panel);
+  });
 }
 
 /** 樱花frp 表单 */

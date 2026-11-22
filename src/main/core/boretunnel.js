@@ -2,24 +2,35 @@
 /**
  * bore 隧道（纯 Node 实现，不需要任何外部二进制）
  *
- * ★ 为什么值得内置：
- *   frp 需要一份 frpc.exe（13 MB）和一台有公网 IP 的 frps。
- *   **bore 是一个极简的反向隧道协议**，服务端是公开的（bore.pub），
- *   协议简单到可以直接在 Node 里实现，不需要下载任何可执行文件。
+ * ★★★ 协议修正（2026-11-22）：第一版按「换行符分隔」写，连上 bore.pub 后
+ *   发了 Hello 却永远收不到响应。翻 bore 官方源码 `src/shared.rs` 才看清：
  *
- * 协议（照隔壁开源项目 BoreBackend.kt 的实现，逐条对齐）：
- *   1. 连上 bore 服务端（默认 bore.pub:7835）
- *   2. 发一行 JSON：`{"Hello":<本地端口>}\n`
- *   3. 服务端回：`{"Hello":<分配的公网端口>}\n`
- *   4. 然后服务端会推 `{"Connection":"<uuid>"}\n`
- *      → 客户端再连一条数据连接，发 `{"Accept":"<uuid>"}` 完成握手
+ *     let codec = AnyDelimiterCodec::new_with_max_length(vec![0], vec![0], MAX_FRAME_LENGTH);
+ *
+ *   **帧分隔符是 NULL 字节 `\0`，不是换行符**，且单帧上限 256 字节。
+ *   消息体是 serde 序列化的 JSON，枚举按 serde 默认外部标签格式，即：
+ *     ClientMessage::Hello(25565)      → {"Hello":25565}
+ *     ClientMessage::Accept(uuid)      → {"Accept":"<uuid>"}
+ *     ClientMessage::Authenticate(hmac)→ {"Authenticate":"<hex>"}
+ *     ServerMessage::Challenge(uuid)   → {"Challenge":"<uuid>"}
+ *     ServerMessage::Hello(port)       → {"Hello":12345}
+ *     ServerMessage::Heartbeat         → "Heartbeat"      ← 单元枚举，序列化成字符串！
+ *     ServerMessage::Connection(uuid)  → {"Connection":"<uuid>"}
+ *     ServerMessage::Error(msg)        → {"Error":"..."}
+ *
+ * ★ 为什么值得内置（对未成年玩家尤其重要）：
+ *   樱花frp / 自建 frps 都要实名或成人身份，很多玩家用不了。
+ *   bore.pub 是**公开的、匿名的、零注册**隧道 —— 连上就能用。
+ *   代价是端口随机、无鉴权、延迟取决于公共节点，适合「临时和朋友玩一会儿」。
+ *
+ * 协议流程：
+ *   1. 连 bore 服务端（默认 bore.pub:7835，TCP 控制端口）
+ *   2. 发 `{"Hello":<本地端口>}\0`
+ *   3. 服务端回 `{"Hello":<分配的公网端口>}\0`
+ *   4. 之后服务端推 `{"Connection":"<uuid>"}\0`
+ *      → 客户端再连一条数据连接，发 `{"Accept":"<uuid>"}\0` 完成握手
  *      → 之后这条连接就双向转发到本地端口
- *
- * 限制（必须跟玩家说清楚）：
- *   · 公共 bore.pub 的端口是**随机分配**的，每次都不一样
- *   · 没有鉴权，任何人都能连到分配给你的端口
- *   · 延迟取决于 bore.pub 的线路
- *   所以它适合「临时和朋友玩一会儿」，正式服还是用 frp + 自建 frps。
+ *   5. 服务端可能推 `"Heartbeat"`（字符串），忽略即可
  */
 
 const net = require('node:net');
@@ -27,6 +38,8 @@ const net = require('node:net');
 /** 默认公共 bore 服务端 */
 const DEFAULT_SERVER = 'bore.pub';
 const DEFAULT_PORT = 7835;
+/** 帧分隔符（bore 用 NULL 字节） */
+const SEP = '\0';
 
 /** 运行态 */
 let rt = null;
@@ -57,22 +70,29 @@ function parseAddr(addr) {
   return { host: host || DEFAULT_SERVER, port: Number.isInteger(port) && port > 0 ? port : DEFAULT_PORT };
 }
 
-/** 读一行（以 \n 结尾），带缓冲 */
-function makeLineReader(socket) {
-  let buf = '';
+/**
+ * 按 NULL 字节切帧的读取器。
+ * ★ 必须用 Buffer 处理：JSON 里可能有非 ASCII 字符，按字符串切会踩多字节边界。
+ */
+function makeFrameReader(socket) {
+  let buf = Buffer.alloc(0);
   const waiters = [];
   let ended = false;
-  socket.setEncoding('utf8');
-  socket.on('data', (chunk) => {
-    buf += chunk;
-    let idx = buf.indexOf('\n');
-    while (idx >= 0) {
-      const line = buf.slice(0, idx).replace(/\r$/, '');
-      buf = buf.slice(idx + 1);
+
+  const flush = () => {
+    while (waiters.length) {
+      const idx = buf.indexOf(0);
+      if (idx < 0) return;
+      const frame = buf.subarray(0, idx).toString('utf8');
+      buf = buf.subarray(idx + 1);
       const w = waiters.shift();
-      if (w) w(line);
-      idx = buf.indexOf('\n');
+      if (w) w(frame);
     }
+  };
+
+  socket.on('data', (chunk) => {
+    buf = Buffer.concat([buf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+    flush();
   });
   socket.on('end', () => {
     ended = true;
@@ -88,13 +108,14 @@ function makeLineReader(socket) {
       w(null);
     }
   });
+
   return {
     read(timeoutMs = 30000) {
-      if (buf.indexOf('\n') >= 0) {
-        const idx = buf.indexOf('\n');
-        const line = buf.slice(0, idx).replace(/\r$/, '');
-        buf = buf.slice(idx + 1);
-        return Promise.resolve(line);
+      const idx = buf.indexOf(0);
+      if (idx >= 0) {
+        const frame = buf.subarray(0, idx).toString('utf8');
+        buf = buf.subarray(idx + 1);
+        return Promise.resolve(frame);
       }
       if (ended) return Promise.resolve(null);
       return new Promise((resolve) => {
@@ -105,16 +126,22 @@ function makeLineReader(socket) {
           resolve(v);
         };
         waiters.push(w);
-        setTimeout(() => {
-          if (!done) {
+        if (timeoutMs > 0) {
+          setTimeout(() => {
+            if (done) return;
             const i = waiters.indexOf(w);
             if (i >= 0) waiters.splice(i, 1);
             w(null);
-          }
-        }, timeoutMs).unref?.();
+          }, timeoutMs).unref?.();
+        }
       });
     },
   };
+}
+
+/** 发一帧（自动补 NULL 分隔符） */
+function sendFrame(socket, obj) {
+  socket.write(JSON.stringify(obj) + SEP);
 }
 
 /**
@@ -181,14 +208,14 @@ async function start(opts = {}) {
     throw err;
   });
 
-  const reader = makeLineReader(control);
+  const reader = makeFrameReader(control);
   emit(`[bore] 已连接，发送 Hello(localPort=${localPort})`);
-  control.write(`${JSON.stringify({ Hello: localPort })}\n`);
+  sendFrame(control, { Hello: localPort });
 
   const hello = await reader.read(30000);
   if (!hello) {
     state.stopped = true;
-    state.lastError = 'bore 服务端无响应';
+    state.lastError = 'bore 服务端无响应（30 秒没有回 Hello）';
     try {
       control.destroy();
     } catch {
@@ -196,13 +223,12 @@ async function start(opts = {}) {
     }
     throw new Error(state.lastError);
   }
-  let assigned;
+  let parsed = null;
   try {
-    const j = JSON.parse(hello);
-    assigned = Number(j.Hello);
+    parsed = JSON.parse(hello);
   } catch {
     state.stopped = true;
-    state.lastError = `bore 服务端返回异常：${String(hello).slice(0, 80)}`;
+    state.lastError = `bore 服务端返回无法解析的内容：${String(hello).slice(0, 80)}`;
     try {
       control.destroy();
     } catch {
@@ -210,9 +236,26 @@ async function start(opts = {}) {
     }
     throw new Error(state.lastError);
   }
+  // 服务端可能先发 Error
+  if (parsed && parsed.Error) {
+    state.stopped = true;
+    state.lastError = `bore 服务端拒绝：${parsed.Error}`;
+    try {
+      control.destroy();
+    } catch {
+      /* ignore */
+    }
+    throw new Error(state.lastError);
+  }
+  const assigned = Number(parsed && parsed.Hello);
   if (!Number.isInteger(assigned)) {
     state.stopped = true;
     state.lastError = `bore 服务端没有分配端口：${String(hello).slice(0, 80)}`;
+    try {
+      control.destroy();
+    } catch {
+      /* ignore */
+    }
     throw new Error(state.lastError);
   }
 
@@ -220,19 +263,28 @@ async function start(opts = {}) {
   emit(`[bore] 隧道已建立，公网地址：${state.publicAddr}`);
   onState('running', `公网地址：${state.publicAddr}`);
 
-  // 后台循环读 Connection
+  // 后台循环读 Connection / Heartbeat
   (async () => {
     for (;;) {
       if (state.stopped) break;
       // eslint-disable-next-line no-await-in-loop
-      const line = await reader.read(3600000);
-      if (!line) break;
+      const frame = await reader.read(3600000);
+      if (!frame) break;
+      if (frame === '"Heartbeat"') {
+        // 服务端心跳，忽略（bore 不需要客户端回包）
+        continue;
+      }
       let msg;
       try {
-        msg = JSON.parse(line);
+        msg = JSON.parse(frame);
       } catch {
-        emit(`[bore] 看不懂的消息：${line.slice(0, 60)}`);
+        emit(`[bore] 看不懂的帧：${frame.slice(0, 60)}`);
         continue;
+      }
+      if (msg && msg.Error) {
+        state.lastError = String(msg.Error);
+        emit(`[bore] 服务端报错：${state.lastError}`);
+        break;
       }
       if (!msg || !msg.Connection) continue;
       const uuid = String(msg.Connection);
@@ -246,7 +298,7 @@ async function start(opts = {}) {
     if (!state.stopped) {
       state.stopped = true;
       state.exitCode = 0;
-      onState('stopped', '控制连接已断开');
+      onState('stopped', state.lastError || '控制连接已断开');
     }
   })();
 
@@ -268,7 +320,14 @@ async function forwardOne({ host, port, uuid, localPort, state, emit }) {
       reject(err);
     });
   });
-  data.write(`${JSON.stringify({ Accept: uuid })}\n`);
+
+  /**
+   * ★ 数据连接上也要按同一套 NULL 分隔协议发 Accept。
+   *   若服务端启用了 secret，会先收到 {"Challenge":"<uuid>"}，
+   *   需要回 {"Authenticate":"<hmac>"}；public bore.pub 一般不带 secret，
+   *   这里遇到 Challenge 就明确报错（而不是静默卡住）。
+   */
+  sendFrame(data, { Accept: uuid });
 
   const local = net.createConnection({ host: '127.0.0.1', port: localPort });
   state.sockets.add(local);

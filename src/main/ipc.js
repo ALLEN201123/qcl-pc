@@ -1859,24 +1859,39 @@ const handlers = {
     }
   },
 
-  // ---- 内网穿透（frp） ----
+  // ---- 内网穿透（多种方案） ----
   /**
-   * ★ 用 frp 而不是 Terracotta：Terracotta 是「MC 客户端开房间联机」用的
-   *   （扫本机游戏世界的端口），独立服务端要的是标准 frp 端口映射。
+   * ★ 为什么要有多种：
+   *   樱花frp / 自建 frps 都需要**实名或成人身份**，很多玩家（尤其未成年）用不了。
+   *   所以必须提供零门槛方案：
+   *     · bore（bore.pub）：**公开、匿名、零注册**，协议简单，内置纯 Node 实现
+   *     · 魅frp：另一家 frp 服务商（同样能下发 TOML 给 frpc）
+   *     · 樱花frp：节点多、稳定，但要 token
+   *     · 自建 frps：自己的服务器，最自由
    *
-   * 两条路：
-   *   ① 樱花frp（免费公共节点，填 token 即可）
-   *   ② 自建 frps（填地址/端口/token）
+   * 另外 Terracotta 是「MC 客户端开房间联机」用的，不是给独立服务端做端口映射的，
+   * 所以这里不混进来。
    */
   'server:tunnel:status': async () => {
     try {
       const t = need('servertunnel');
-      return { ok: true, ...t.status(), installed: t.isInstalled(home()), version: t.FRP_VERSION };
+      const bore = need('boretunnel');
+      const bs = bore.status();
+      const frp = t.status();
+      return {
+        ok: true,
+        // 兼容旧字段（frp 状态）
+        ...frp,
+        installed: t.isInstalled(home()),
+        version: t.FRP_VERSION,
+        frp: { running: !!frp.running, installed: t.isInstalled(home()) },
+        bore: { running: !!bs.running, publicAddr: bs.publicAddr || '', lines: bs.lines || [] },
+      };
     } catch (err) {
       return { ok: false, running: false, error: err?.message || String(err) };
     }
   },
-  /** 准备 frpc 引擎（下载官方 frp 包并解出可执行文件） */
+  /** 准备 frpc 引擎（仅 frp 系需要；bore 不需要任何外部二进制） */
   'server:tunnel:prepare': async () => {
     try {
       const t = need('servertunnel');
@@ -1886,6 +1901,59 @@ const handlers = {
       return { ok: true, ...r };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** bore：启动（零注册，匿名公共节点） */
+  'server:tunnel:boreStart': async ({ localPort, serverAddr, serverId } = {}) => {
+    try {
+      const bore = need('boretunnel');
+      let port = Number(localPort) || 0;
+      if (!port && serverId) {
+        try {
+          const props = need('serverprops');
+          const r = props.read(need('server').workDir(home(), serverId));
+          port = Number(r.values['server-port']) || 25565;
+        } catch {
+          port = 25565;
+        }
+      }
+      if (!port) port = 25565;
+      const r = await bore.start({
+        localPort: port,
+        serverAddr,
+        onLog: (line) => send('server:tunnel:log', { line }),
+        onState: (state, message) => send('server:tunnel:state', { state, message }),
+      });
+      return { ok: true, ...r, localPort: port };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  'server:tunnel:boreStop': async () => {
+    try {
+      const r = await need('boretunnel').stop();
+      send('server:tunnel:state', { state: 'stopped', message: '已停止' });
+      return { ok: true, ...r };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 魅frp：验证 token */
+  'server:tunnel:meUser': async ({ token } = {}) => {
+    try {
+      const s = need('mefrp');
+      return { ok: true, account: await s.userInfo(token) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
+  /** 魅frp：隧道列表 */
+  'server:tunnel:meProxies': async ({ token } = {}) => {
+    try {
+      const s = need('mefrp');
+      return { ok: true, list: await s.proxyList(token) };
+    } catch (err) {
+      return { ok: false, list: [], error: err?.message || String(err) };
     }
   },
   /** 樱花frp：验证 token 并取账号 */
@@ -1927,12 +1995,16 @@ const handlers = {
   },
   /**
    * 启动穿透。
-   * mode: 'sakura'（樱花，用 tunnelId 拉配置）| 'custom'（自建，用给定参数生成配置）
+   * mode:
+   *   'bore'   —— 零注册匿名（bore.pub），不需要 token
+   *   'sakura' —— 樱花frp，用 tunnelId 拉 TOML
+   *   'me'     —— 魅frp，用 proxyId 拉 TOML
+   *   'custom' —— 自建 frps，用给定参数生成 TOML
    */
   'server:tunnel:start': async (payload = {}) => {
     try {
       const t = need('servertunnel');
-      const { mode, token, tunnelId, serverAddr, serverPort, authToken, localPort, remotePort, proxyName } = payload;
+      const { mode, token, tunnelId, proxyId, serverAddr, serverPort, authToken, localPort, remotePort, proxyName } = payload;
       const sid = payload.serverId;
       // 端口：没指定就从 server.properties 读
       let port = Number(localPort) || 0;
@@ -1947,10 +2019,26 @@ const handlers = {
       }
       if (!port) port = 25565;
 
+      // bore 不走 frpc，直接用自己的实现
+      if (mode === 'bore') {
+        const bore = need('boretunnel');
+        const r = await bore.start({
+          localPort: port,
+          serverAddr,
+          onLog: (line) => send('server:tunnel:log', { line }),
+          onState: (state, message) => send('server:tunnel:state', { state, message }),
+        });
+        return { ok: true, ...r, localPort: port, mode: 'bore' };
+      }
+
       let configText = '';
       if (mode === 'sakura') {
         const s = need('sakurafrp');
         const cfg = await s.tunnelConfig(token, tunnelId);
+        configText = cfg.toml;
+      } else if (mode === 'me') {
+        const s = need('mefrp');
+        const cfg = await s.proxyConfig(token, proxyId);
         configText = cfg.toml;
       } else {
         configText = t.buildToml({
@@ -1969,17 +2057,27 @@ const handlers = {
         onLog: (line) => send('server:tunnel:log', { line }),
         onState: (state, message) => send('server:tunnel:state', { state, message }),
       });
-      return { ok: true, ...r, localPort: port };
+      return { ok: true, ...r, localPort: port, mode: mode || 'custom' };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
   },
+  /** 停止任意一种穿透（bore 与 frp 都停，避免残留） */
   'server:tunnel:stop': async () => {
     try {
-      const t = need('servertunnel');
-      const r = await t.stop();
+      const results = [];
+      try {
+        results.push({ kind: 'frp', ...(await need('servertunnel').stop()) });
+      } catch {
+        /* ignore */
+      }
+      try {
+        results.push({ kind: 'bore', ...(await need('boretunnel').stop()) });
+      } catch {
+        /* ignore */
+      }
       send('server:tunnel:state', { state: 'stopped', message: '已停止' });
-      return { ok: true, ...r };
+      return { ok: true, results };
     } catch (err) {
       return { ok: false, error: err?.message || String(err) };
     }
