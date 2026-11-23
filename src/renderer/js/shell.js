@@ -341,8 +341,33 @@ export function updateRightPanel() {
     if (acct) {
       setHTML(nameEl, html`${acct.name}`);
       const typeLabel = acct.type === 'microsoft' ? '微软正版账号' : '离线账号';
-      const expired = acct.expiresAt && acct.expiresAt < Date.now();
-      setHTML(stateEl, html`${expired ? '登录已过期，点击重新登录' : typeLabel}`);
+      /**
+       * ★★★ 2026-11-23 修（用户报「主界面显示微软账号已过期，但实际没过期」）。
+       *
+       * 对照 HMCL 的做法（vendor/HMCL-latest 的 MicrosoftAccount / MicrosoftService）：
+       *   · HMCL 把服务端的 `expires_in` 存成 notAfter（L148），
+       *   · `validate()` 只做 `now > notAfter` 的布尔判断（L180），
+       *   · **它从不把「令牌过期」当作界面上要展示的状态** ——
+       *     过期就静默刷新，刷新失败才提示重新登录。
+       *
+       * 我们之前反着做：主界面拿 expiresAt 直接画「登录已过期」，
+       * 而那个 expiresAt 还是写死 12 小时算出来的（服务端真实 24 小时），
+       * 于是登录满 12 小时就开始谎报，用户看到的就是这个假警报。
+       *
+       * 现在的规则（与 HMCL 一致）：
+       *   · 微软账号只要有 refreshToken，就**一律显示正常**——
+       *     accessToken 到期时后台会自动换新的，不需要用户做任何事；
+       *   · 只有「没有 refreshToken」才说明真需要重新登录。
+       *   · 不再显示「下次启动自动续期」这种废话 —— 用户不关心令牌细节。
+       */
+      const isMs = acct.type === 'microsoft';
+      const hasRefresh = isMs && acct.canRefresh !== false && !!acct.refreshToken;
+      let stateText = typeLabel;
+      if (isMs && !hasRefresh) {
+        // 只有连刷新令牌都没有了，才是真的需要重新登录
+        stateText = '登录已失效，点击重新登录';
+      }
+      setHTML(stateEl, html`${stateText}`);
       /**
        * ★★★ 头像必须「从皮肤裁脸」，不能直接拿整张皮肤图当头像。
        *   之前写的是 `avatarEl.src = acct.avatar` —— acct.avatar 是一整张 64×64 皮肤，

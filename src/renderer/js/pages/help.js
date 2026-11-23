@@ -225,22 +225,6 @@ function sectionLegacy() {
         <span class="mono">.info</span> 还原启动结构，不需要官方 JSON。
       </div>
     </div>
-
-    <div class="card">
-      <div class="card__title">还没从 Betacraft 搬过来的</div>
-      <div class="doc__text">
-        老实列一下，免得你以为都有了：
-      </div>
-      ${table(
-        ['Betacraft 有', '现状'],
-        [
-          ['皮肤站（把老版本的 skins.minecraft.net 请求转发到活的皮肤库）', '只做了 http 代理这一层，没有独立的皮肤服务'],
-          ['一体化认证服务（老版本 login.minecraft.net 兼容）', '靠同一个 http 代理，没做本地认证服务'],
-          ['服务器列表与在线人数', '没做（没有公开 API，得自己抓）'],
-          ['网页版档案浏览', '没做（启动器里已经能看全部版本，网页版不重要）'],
-        ],
-      )}
-    </div>
   `;
 }
 

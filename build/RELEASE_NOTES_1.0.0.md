@@ -42,7 +42,7 @@ Terracotta 按 HMCL 真实协议重写（`--hmcl <临时文件>` + 本机 HTTP �
 - 目前只打包 Windows x64
 - 26.x 及部分 1.21.x 官方尚未发布 OptiFine，这些版本的 OptiFine 会置灰
 - 5 个 Alpha 时期的 ModLoader 官方只有 `.rar`，无法安装（界面会说明）
-- 尚未移植：Betacraft 皮肤站/老版本认证服务、HMCL 的 NBT 编辑器、截图管理、投影管理、下载限速、自动定时备份
+- 尚未移植：HMCL 的 NBT 编辑器、截图管理、投影管理、下载限速、自动定时备份
 
 ## 开源与许可
 

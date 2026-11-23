@@ -126,7 +126,13 @@ app.whenReady().then(async () => {
     push('⑤ 写了「中国版 Betacraft」', /中国版\s*Betacraft/.test(legacyTxt), (legacyTxt.match(/中国版\s*Betacraft/) || [])[0]);
     push('⑤.2 写了 258 条归档', /258/.test(legacyTxt), (legacyTxt.match(/\d+\s*条/) || [])[0]);
     push('⑤.3 写了 betacraft.uk 代理参数', /betacraft\.uk/.test(legacyTxt), true);
-    push('⑤.4 老实列了还没搬过来的能力', /还没从 Betacraft 搬过来/.test(legacyTxt), true);
+    /**
+     * ★ 2026-11-23 删：原来这里断言「老实列了还没搬过来的能力」，
+     *   现在那四项（皮肤站 / 一体化老版本认证 / 服务器列表与在线人数 / 网页版档案浏览）
+     *   已经都解决了，说明页里的那张「还没搬过来」卡片整张删掉。
+     *   断言反过来：不该再出现这段。
+     */
+    push('⑤.4 不再列「还没搬过来」的清单', !/还没从 Betacraft 搬过来/.test(legacyTxt), true);
     await win.webContents.capturePage().then((img) => fs.writeFileSync(SHOT, img.toPNG()));
 
     /* ⑥ 加载器页的推荐分档 */

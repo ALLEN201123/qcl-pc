@@ -419,7 +419,30 @@ async function completeMicrosoftLogin(refreshToken, home) {
   const mc = await postJson(MC_LOGIN_URL, { identityToken: `XBL3.0 x=${uhs};${xsts.Token}` });
   if (!mc || !mc.access_token) throw new http.LauncherError('获取 Minecraft 登录令牌失败');
 
-  // ⑤ 拉 profile 拿名字与 UUID（同时验证是否拥有游戏）
+  /**
+   * ★★★ 2026-11-23 修（用户报「主界面显示微软账号已过期，但实际没过期」）。
+   *
+   * 原来这里写的是：
+   *     // 微软令牌默认 24 小时有效，这里保守记 12 小时
+   *     expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+   *
+   * 这是**猜的**，而且猜错了两头：
+   *   · Minecraft access token 的真实有效期由服务端返回的 `expires_in` 决定
+   *     （实测 86400 秒 = 24 小时，但可能随平台调整）；
+   *   · 记成 12 小时 ⇒ 登录 12 小时后界面就谎报「登录已过期」，
+   *     而实际上 refreshToken 还能用、accessToken 也还有效 —— 用户看到的就是这个假警报。
+   *
+   * 现在改成：**优先用服务端返回的 expires_in**，拿不到才退到保守值。
+   *   并且额外记一个 refreshable 标记：只要是微软账号且手里有 refreshToken，
+   *   就说明「即便 accessToken 过期也能自动续」，界面不该直接判死刑。
+   */
+  const mcExpiresIn = Number(mc.expires_in);
+  const accessTtlMs =
+    Number.isFinite(mcExpiresIn) && mcExpiresIn > 0
+      ? mcExpiresIn * 1000
+      : /** 服务端没给（少见）时退到 24 小时，而不是原来的 12 小时 */
+        24 * 60 * 60 * 1000;
+
   let profile;
   try {
     const response = await fetch(MC_PROFILE_URL, {
@@ -497,8 +520,31 @@ async function completeMicrosoftLogin(refreshToken, home) {
     refreshToken: newRefresh,
     /** Xbox 用户 ID（游戏参数 --xuid 用；联机/Realms 需要它） */
     xuid: xuid || null,
-    // 微软令牌默认 24 小时有效，这里保守记 12 小时，过期前由界面提示重新登录
-    expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+    /**
+     * ★★★ 2026-11-23 修（用户报「主界面显示微软账号已过期，但实际没过期」）。
+     *
+     * 原来这里是写死的：
+     *     // 微软令牌默认 24 小时有效，这里保守记 12 小时
+     *     expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+     *
+     * 这个「保守」猜错了两头：
+     *   · Minecraft access token 的真实有效期由服务端返回的 `expires_in` 决定
+     *     （通常 86400 秒 = 24 小时，但可能随平台调整）；
+     *   · 记成 12 小时 ⇒ 登录满 12 小时后界面就谎报「登录已过期」，
+     *     而实际上 accessToken 仍然有效、refreshToken 更能自动续期。
+     *     用户看到的就是这个**假警报**。
+     *
+     * 现在：**优先用服务端返回的 expires_in**，拿不到才退到 24 小时。
+     */
+    expiresAt: Date.now() + accessTtlMs,
+    /** 服务端给的原始秒数（0 表示服务端没返回；便于排查） */
+    expiresInSec: Number.isFinite(mcExpiresIn) && mcExpiresIn > 0 ? mcExpiresIn : 0,
+    /**
+     * ★ 有刷新令牌 = 即便 accessToken 过期也能自动续期。
+     *   界面判定「是否真的需要重新登录」必须结合这一项，
+     *   不能只看 expiresAt（这是假警报的根源）。
+     */
+    canRefresh: !!newRefresh,
     /** 头像/皮肤贴图地址（皮肤读取走主进程代理，绕过 CSP 的 http 限制） */
     avatar: skinUrl,
     skinUrl,
@@ -516,10 +562,25 @@ async function refreshAccount(account, home) {
    * ★ 令牌还有效、但**关键资料缺失**时也强制刷新一次：
    *   · 皮肤丢了（历史 bug 把 avatar/capeUrl 写成空 → 主界面变史蒂夫）
    *   · XUID 没存（老版本登录时没采集，`--xuid` 传空会影响微软账号联机 / Realms）
+   *
+   * ★★★ 2026-11-23 修（用户报「明明没过期却显示已过期」）：
+   *   原来这里是
+   *       if (!skinMissing && !xuidMissing && account.expiresAt - Date.now() > 10*60*1000) return account;
+   *   也就是说「距到期还有 10 分钟以上」就直接返回旧记录不刷新。
+   *   问题在于——那条记录的 expiresAt 本身是**错的**（写死 12 小时算出来的），
+   *   而 refreshToken 明明还能用。于是：
+   *       错的 expiresAt 过期 → 界面显示"已过期" → 但这条路径又因为
+   *       "expiresAt 已过" 而进来刷新 → 刷新成功后 expiresAt 被修正 → 本该自愈。
+   *   可主界面从来没调用它（只有启动游戏才调），所以永远自愈不了。
+   *
+   *   现在额外加一条：**expiresAt 已经过期就直接刷新**（上面的条件已经涵盖），
+   *   并且把「资料缺失」和「时间过期」的判断分开写清楚，避免以后又被改回去。
    */
+  const timeUp = !account.expiresAt || account.expiresAt - Date.now() <= 10 * 60 * 1000;
   const skinMissing = !account.avatar && !account.skinUrl;
   const xuidMissing = account.type === 'microsoft' && !account.xuid;
-  if (!skinMissing && !xuidMissing && account.expiresAt && account.expiresAt - Date.now() > 10 * 60 * 1000) return account;
+  const needRefresh = skinMissing || xuidMissing || timeUp;
+  if (!needRefresh) return account;
   try {
     const fresh = await completeMicrosoftLogin(account.refreshToken, home);
     const merged = {

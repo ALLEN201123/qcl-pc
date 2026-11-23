@@ -82,7 +82,71 @@ export async function loadAccounts() {
   state.accounts = Array.isArray(r.data) ? r.data : [];
   if (state.accounts.length === 0 && !r.ok) state.accounts = clone(SAMPLE_ACCOUNTS);
   ensureCurrentAccount();
+
+  /**
+   * ★★★ 2026-11-23 新增（用户报「微软账号没过期却显示已过期」）。
+   *
+   * 账号列表里存的 expiresAt 可能是**旧版本算错的**（写死 12 小时），
+   * 或者确实过了 accessToken 的有效期。但这两种情况下只要 refreshToken 还在，
+   * 账号就是可用的 —— 问题是以前没有任何时机去把它换成新的。
+   *
+   * 所以在加载账号后**后台静默续期一次**：
+   *   · 只对「微软账号 + 有 refreshToken + 已过期或没记录」的做
+   *   · 不 await（不阻塞界面），失败也静默（离线/断网时保持原样）
+   *   · 成功后重新读一次列表，界面自然就显示正确状态
+   */
+  refreshStaleMicrosoftAccounts().catch(() => {});
   return state.accounts;
+}
+
+/** 后台续期那些「看起来过期」的微软账号（静默，不干扰用户） */
+async function refreshStaleMicrosoftAccounts() {
+  const now = Date.now();
+  const stale = (state.accounts || []).filter(
+    (a) =>
+      a &&
+      a.type === 'microsoft' &&
+      a.refreshToken &&
+      // 只有真的需要才请求：没记时间、或已过期、或 1 小时内要过期
+      (!a.expiresAt || a.expiresAt - now < 60 * 60 * 1000)
+  );
+  if (!stale.length) return;
+
+  let changed = false;
+  for (const acc of stale) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await call('accounts:refresh', { uuid: acc.uuid }, { optional: true });
+      const d = r && r.ok ? r.data : null;
+      if (d && d.ok && d.refreshed) changed = true;
+    } catch {
+      /* 单个失败不影响其它账号 */
+    }
+  }
+  if (changed) {
+    // 重新拉一次，把修正后的 expiresAt 显示出来
+    try {
+      const r2 = await call('accounts:list', {}, { optional: true });
+      /**
+       * ★ accounts:list 返回的是**数组本身**（accounts.list 的返回值就是数组），
+       *   不要按 {accounts:[...]} 去取，否则永远是 undefined。
+       */
+      const list = r2 && r2.ok ? r2.data : null;
+      if (Array.isArray(list)) {
+        state.accounts = list;
+        ensureCurrentAccount();
+        // 通知界面刷新（主界面右侧账号区）
+        try {
+          const { updateRightPanel } = await import('./shell.js');
+          if (typeof updateRightPanel === 'function') updateRightPanel();
+        } catch {
+          /* 忽略 */
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+  }
 }
 
 export async function loadJava() {

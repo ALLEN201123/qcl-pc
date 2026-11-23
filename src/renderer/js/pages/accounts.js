@@ -75,14 +75,29 @@ export const accountsPage = {
         html`<div class="list">
           ${state.accounts.map((acc) => {
             const active = cur && cur.uuid === acc.uuid;
-            const expired = acc.expiresAt && acc.expiresAt < Date.now();
+            /**
+             * ★★★ 2026-11-23 修（用户报「微软账号没过期却显示已过期」）。
+             *
+             * 对照 HMCL（MicrosoftAccount.logInWhenCredentialsExpired）：
+             *   它的态度是「令牌过期就静默刷新，失败才提示重新登录」，
+             *   **从不把令牌到期当作界面上要展示的徽标**。
+             *
+             * 我们之前只看 `expiresAt < Date.now()`，而那个 expiresAt 还是
+             * 写死 12 小时算的（服务端真实 24 小时）—— 于是登录满 12 小时就误报。
+             *
+             * 现在：有 refreshToken 就能一直续，不显示任何过期标记；
+             *       只有连刷新令牌都没有了，才是真失效。
+             */
+            const isMs = acc.type === 'microsoft';
+            const hasRefresh = isMs && acc.canRefresh !== false && !!acc.refreshToken;
+            const expired = isMs && !hasRefresh;
             return html`<div class="row ${active ? 'is-active' : ''}" data-uuid="${acc.uuid}">
               <img class="row__icon" data-avatar-of="${acc.uuid}" src="./assets/icon/ic_steve.png" alt="" />
               <div class="row__main">
                 <div class="row__title">${acc.name}${active ? ' · 当前使用' : ''}</div>
                 <div class="row__meta">
                   <span class="badge ${acc.type === 'microsoft' ? 'badge--accent' : ''}">${acc.type === 'microsoft' ? '微软正版' : '离线'}</span>
-                  ${expired ? html`<span class="badge badge--warn">登录已过期</span>` : raw('')}
+                  ${expired ? html`<span class="badge badge--warn">登录已失效</span>` : raw('')}
                   ${acc.skinFile ? html`<span class="badge badge--accent">自定义皮肤</span>` : raw('')}
                   <span class="mono">${acc.uuid}</span>
                 </div>

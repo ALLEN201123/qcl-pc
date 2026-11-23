@@ -733,6 +733,57 @@ const handlers = {
     if (!mod) return [];
     return mod.list(home());
   },
+  /**
+   * 主动续期微软账号令牌。
+   *
+   * ★★★ 2026-11-23 新增（用户报「主界面显示微软账号已过期，但账号明明还能用」）。
+   *
+   * 根因有两层：
+   *   ① 主进程把 accessToken 的到期时间**写死成 12 小时**
+   *      （服务端真实给的是 expires_in，通常 24 小时），
+   *      所以登录满 12 小时界面就开始谎报「已过期」；
+   *   ② 更关键：**accessToken 过期根本不等于账号失效**。
+   *      Microsoft 的 refreshToken 有效期是几个月到一年，
+   *      只要它在，accessToken 随时能换新的 —— 账号等于「一直可用」。
+   *      但渲染层只看 expiresAt，于是一个陈旧的 expiresAt 就永远显示已过期。
+   *   而在此之前**根本没有续期通道**：refreshAccount 只在启动游戏时才被调用，
+   *   主界面从来没机会把过期令牌换成新的。
+   *
+   * 这里补上通道：界面拿到账号列表后顺手调一次，把陈旧的 expiresAt 校准成真实值。
+   */
+  'accounts:refresh': async ({ uuid } = {}) => {
+    try {
+      const mod = need('accounts');
+      /**
+       * ★ accounts.list() 返回的是**数组本身**（不是 {accounts, selected}），
+       *   选中账号带 selected:true 且排在最前。
+       */
+      const raw = await mod.list(home());
+      const accounts = Array.isArray(raw) ? raw : (raw && raw.accounts) || [];
+      const target = uuid ? accounts.find((a) => a.uuid === uuid) : accounts.find((a) => a.selected) || accounts[0];
+      if (!target) return { ok: false, error: '找不到这个账号' };
+      if (target.type !== 'microsoft') return { ok: true, skipped: true, reason: '离线账号不需要续期' };
+      if (!target.refreshToken) return { ok: true, skipped: true, reason: '没有刷新令牌，需要重新登录' };
+      const fresh = await mod.refreshAccount(target, home());
+      const refreshed = !!(fresh && fresh.accessToken && fresh.accessToken !== target.accessToken);
+      if (refreshed) send('accounts:changed', {});
+      return {
+        ok: true,
+        refreshed,
+        account: {
+          uuid: fresh.uuid,
+          name: fresh.name,
+          type: fresh.type,
+          expiresAt: fresh.expiresAt || null,
+          expiresInSec: fresh.expiresInSec || 0,
+          canRefresh: fresh.canRefresh !== false && !!fresh.refreshToken,
+          hasRefreshToken: !!fresh.refreshToken,
+        },
+      };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  },
   'accounts:addOffline': async ({ name }) => {
     const mod = need('accounts');
     const account = await mod.addOffline(home(), String(name || '').trim());
